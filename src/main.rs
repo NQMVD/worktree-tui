@@ -624,6 +624,11 @@ impl App {
 
     // ===== Actions =====
 
+    fn get_worktrees_dir(&self) -> PathBuf {
+        let parent = self.repo_root.parent().unwrap_or(&self.repo_root);
+        parent.join(format!("{}-worktrees", self.repo_name))
+    }
+
     fn create_worktree(&mut self) -> Result<()> {
         let name = self.create_input.trim();
         if name.is_empty() {
@@ -631,8 +636,18 @@ impl App {
             return Ok(());
         }
 
-        let parent = self.repo_root.parent().unwrap_or(&self.repo_root);
-        let worktree_path = parent.join(name);
+        // Create worktrees in PROJECT-worktrees/ directory
+        let worktrees_dir = self.get_worktrees_dir();
+        
+        // Ensure the worktrees directory exists
+        if !worktrees_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&worktrees_dir) {
+                self.set_status(&format!("Failed to create worktrees dir: {}", e), MessageLevel::Error);
+                return Ok(());
+            }
+        }
+        
+        let worktree_path = worktrees_dir.join(name);
 
         let mut args = vec!["worktree", "add"];
 
@@ -876,6 +891,83 @@ impl App {
         Ok(())
     }
 
+    fn merge_to_main(&mut self) -> Result<()> {
+        if let Some(wt) = self.selected_worktree().cloned() {
+            if wt.is_main {
+                self.set_status("Cannot merge main into itself", MessageLevel::Error);
+                return Ok(());
+            }
+
+            let branch_name = match &wt.branch {
+                Some(name) => name.clone(),
+                None => {
+                    self.set_status("Cannot merge detached HEAD", MessageLevel::Error);
+                    return Ok(());
+                }
+            };
+
+            // Find the main branch name (usually main or master)
+            let main_branch = self.get_main_branch_name();
+            
+            self.set_status(&format!("Merging {} into {}...", branch_name, main_branch), MessageLevel::Info);
+
+            // Perform merge from the main repo directory
+            let output = Command::new("git")
+                .current_dir(&self.repo_root)
+                .args(["merge", &branch_name, "--no-edit"])
+                .output()?;
+
+            if output.status.success() {
+                self.set_status(
+                    &format!("Merged {} into {}", branch_name, main_branch),
+                    MessageLevel::Success,
+                );
+                self.refresh_worktrees()?;
+            } else {
+                let error = String::from_utf8_lossy(&output.stderr);
+                if error.contains("CONFLICT") || error.contains("conflict") {
+                    self.set_status("Merge conflict! Resolve in main worktree", MessageLevel::Warning);
+                } else {
+                    self.set_status(&format!("Merge failed: {}", error.trim()), MessageLevel::Error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn get_main_branch_name(&self) -> String {
+        // Try to detect the main branch name
+        let output = Command::new("git")
+            .current_dir(&self.repo_root)
+            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let branch = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .strip_prefix("origin/")
+                    .unwrap_or("main")
+                    .to_string();
+                return branch;
+            }
+        }
+
+        // Fallback: check if main or master exists
+        let output = Command::new("git")
+            .current_dir(&self.repo_root)
+            .args(["rev-parse", "--verify", "main"])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                return "main".to_string();
+            }
+        }
+
+        "master".to_string()
+    }
+
     fn cycle_sort(&mut self) {
         self.sort_order = self.sort_order.next();
         self.apply_sort();
@@ -1003,6 +1095,7 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Char('r') | KeyCode::Char('R') => { let _ = app.refresh_worktrees(); }
         KeyCode::Char('F') => { let _ = app.fetch_all(); }
         KeyCode::Char('X') => { let _ = app.prune_worktrees(); }
+        KeyCode::Char('m') => { let _ = app.merge_to_main(); }
 
         KeyCode::Char('/') => {
             app.mode = AppMode::Search;
