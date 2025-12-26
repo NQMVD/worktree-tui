@@ -130,6 +130,7 @@ enum AppMode {
     Delete,
     Search,
     BranchSelect,
+    MergeSelect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +214,7 @@ struct App {
     available_branches: Vec<Branch>,
     branch_list_state: ListState,
     create_from_branch: Option<String>,
+    merge_source_idx: Option<usize>,
 
     // Delete dialog
     delete_confirm: bool,
@@ -256,6 +258,7 @@ impl App {
             available_branches: Vec::new(),
             branch_list_state: ListState::default(),
             create_from_branch: None,
+            merge_source_idx: None,
 
             delete_confirm: false,
 
@@ -891,45 +894,53 @@ impl App {
         Ok(())
     }
 
-    fn merge_to_main(&mut self) -> Result<()> {
-        if let Some(wt) = self.selected_worktree().cloned() {
-            if wt.is_main {
-                self.set_status("Cannot merge main into itself", MessageLevel::Error);
+    fn perform_merge(&mut self, source_idx: usize, target_branch: String) -> Result<()> {
+        let source_wt = &self.worktrees[source_idx];
+        let source_branch = match &source_wt.branch {
+            Some(b) => b.clone(),
+            None => return Ok(()), // Should be handled by caller
+        };
+
+        if source_branch == target_branch {
+            self.set_status("Cannot merge branch into itself", MessageLevel::Error);
+            return Ok(());
+        }
+
+        // Find a worktree where target_branch is checked out
+        let target_wt_path = self.worktrees.iter()
+            .find(|wt| wt.branch.as_ref() == Some(&target_branch))
+            .map(|wt| wt.path.clone());
+
+        let merge_path = match target_wt_path {
+            Some(path) => path,
+            None => {
+                // If not found, we could potentially try to merge in the main repo
+                // if the main repo can switch to that branch.
+                // For now, let's just support merging into active worktrees.
+                self.set_status(&format!("Branch {} is not active in any worktree", target_branch), MessageLevel::Error);
                 return Ok(());
             }
+        };
 
-            let branch_name = match &wt.branch {
-                Some(name) => name.clone(),
-                None => {
-                    self.set_status("Cannot merge detached HEAD", MessageLevel::Error);
-                    return Ok(());
-                }
-            };
+        self.set_status(&format!("Merging {} into {}...", source_branch, target_branch), MessageLevel::Info);
 
-            // Find the main branch name (usually main or master)
-            let main_branch = self.get_main_branch_name();
-            
-            self.set_status(&format!("Merging {} into {}...", branch_name, main_branch), MessageLevel::Info);
+        let output = Command::new("git")
+            .current_dir(&merge_path)
+            .args(["merge", &source_branch, "--no-edit"])
+            .output()?;
 
-            // Perform merge from the main repo directory
-            let output = Command::new("git")
-                .current_dir(&self.repo_root)
-                .args(["merge", &branch_name, "--no-edit"])
-                .output()?;
-
-            if output.status.success() {
-                self.set_status(
-                    &format!("Merged {} into {}", branch_name, main_branch),
-                    MessageLevel::Success,
-                );
-                self.refresh_worktrees()?;
+        if output.status.success() {
+            self.set_status(
+                &format!("Merged {} into {}", source_branch, target_branch),
+                MessageLevel::Success,
+            );
+            self.refresh_worktrees()?;
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr);
+            if error.contains("CONFLICT") || error.contains("conflict") {
+                self.set_status(&format!("Conflict! Resolve in: {}", merge_path.display()), MessageLevel::Warning);
             } else {
-                let error = String::from_utf8_lossy(&output.stderr);
-                if error.contains("CONFLICT") || error.contains("conflict") {
-                    self.set_status("Merge conflict! Resolve in main worktree", MessageLevel::Warning);
-                } else {
-                    self.set_status(&format!("Merge failed: {}", error.trim()), MessageLevel::Error);
-                }
+                self.set_status(&format!("Merge failed: {}", error.trim()), MessageLevel::Error);
             }
         }
         Ok(())
@@ -968,6 +979,34 @@ impl App {
         "master".to_string()
     }
 
+    fn refresh_merge_branches(&mut self) {
+        let mut branches = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        
+        for wt in &self.worktrees {
+            if let Some(ref name) = wt.branch {
+                if seen.insert(name.clone()) {
+                    branches.push(Branch {
+                        name: name.clone(),
+                        is_remote: false,
+                        is_current: wt.is_main,
+                    });
+                }
+            }
+        }
+        
+        // Sort active branches: main/master first, then alphabetically
+        branches.sort_by(|a, b| {
+            let a_is_main = a.name == "main" || a.name == "master";
+            let b_is_main = b.name == "main" || b.name == "master";
+            if a_is_main && !b_is_main { std::cmp::Ordering::Less }
+            else if !a_is_main && b_is_main { std::cmp::Ordering::Greater }
+            else { a.name.cmp(&b.name) }
+        });
+
+        self.available_branches = branches;
+    }
+
     fn cycle_sort(&mut self) {
         self.sort_order = self.sort_order.next();
         self.apply_sort();
@@ -994,6 +1033,7 @@ fn handle_events(app: &mut App) -> Result<bool> {
                     AppMode::Delete => handle_delete_mode(app, key.code)?,
                     AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
                     AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
+                    AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -1095,7 +1135,24 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Char('r') | KeyCode::Char('R') => { let _ = app.refresh_worktrees(); }
         KeyCode::Char('F') => { let _ = app.fetch_all(); }
         KeyCode::Char('X') => { let _ = app.prune_worktrees(); }
-        KeyCode::Char('m') => { let _ = app.merge_to_main(); }
+        KeyCode::Char('m') => {
+            if let Some(wt) = app.selected_worktree() {
+                if wt.is_main && wt.branch.as_deref() == Some(&app.get_main_branch_name()) {
+                    // It's the main branch in the main worktree, 
+                    // we can allow merging from it if the user wants to merge into something else.
+                }
+                
+                if wt.branch.is_none() {
+                    app.set_status("Cannot merge detached HEAD", MessageLevel::Error);
+                } else {
+                    let idx = app.table_state.selected().unwrap();
+                    app.merge_source_idx = Some(app.filtered_indices[idx]);
+                    app.mode = AppMode::MergeSelect;
+                    app.refresh_merge_branches();
+                    app.branch_list_state.select(Some(0));
+                }
+            }
+        }
 
         KeyCode::Char('/') => {
             app.mode = AppMode::Search;
@@ -1223,6 +1280,44 @@ fn handle_branch_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
     Ok(())
 }
 
+fn handle_merge_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
+    match key {
+        KeyCode::Esc => {
+            app.mode = AppMode::Normal;
+            app.merge_source_idx = None;
+        }
+        KeyCode::Enter => {
+            let target_branch = if let Some(idx) = app.branch_list_state.selected() {
+                app.available_branches.get(idx).map(|b| b.name.clone())
+            } else {
+                None
+            };
+
+            if let (Some(source_idx), Some(target)) = (app.merge_source_idx, target_branch) {
+                app.perform_merge(source_idx, target)?;
+            }
+            app.mode = AppMode::Normal;
+            app.merge_source_idx = None;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            let len = app.available_branches.len();
+            if len > 0 {
+                let current = app.branch_list_state.selected().unwrap_or(0);
+                app.branch_list_state.select(Some((current + 1) % len));
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            let len = app.available_branches.len();
+            if len > 0 {
+                let current = app.branch_list_state.selected().unwrap_or(0);
+                app.branch_list_state.select(Some(if current == 0 { len - 1 } else { current - 1 }));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 // ============================================================================
 // UI Rendering
 // ============================================================================
@@ -1249,7 +1344,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
         AppMode::Delete => render_delete_dialog(frame, app),
         AppMode::BranchSelect => {
             render_create_dialog(frame, app);
-            render_branch_select_dialog(frame, app);
+            render_branch_select_dialog(frame, app, "Select Base Branch");
+        }
+        AppMode::MergeSelect => {
+            render_branch_select_dialog(frame, app, "Merge Into Branch");
         }
         AppMode::Search => render_search_bar(frame, app),
         _ => {}
@@ -1524,7 +1622,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mode_hints = match app.mode {
         AppMode::Normal => vec![
             ("j/k", "nav"), ("1-9", "jump"), ("y", "copy"), ("p/P", "pull/push"),
-            ("s", "sort"), ("/", "search"),
+            ("m", "merge"), ("s", "sort"), ("/", "search"),
         ],
         AppMode::Search => vec![("Enter", "confirm"), ("Esc", "cancel")],
         _ => vec![("Esc", "cancel")],
@@ -1590,6 +1688,7 @@ fn render_help_dialog(frame: &mut Frame) {
             "F                Fetch all remotes",
             "r / R            Refresh list",
             "X                Prune stale",
+            "m                Merge branch",
         ]),
         ("Utilities", vec![
             "y                Copy path to clipboard",
@@ -1687,14 +1786,14 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
     );
 }
 
-fn render_branch_select_dialog(frame: &mut Frame, app: &mut App) {
+fn render_branch_select_dialog(frame: &mut Frame, app: &mut App, title: &str) {
     let area = centered_rect(40, 50, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Select Base Branch", Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(title, Style::default().fg(colors::CLAUDE_ORANGE).bold()),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1723,6 +1822,16 @@ fn render_branch_select_dialog(frame: &mut Frame, app: &mut App) {
         .highlight_symbol(" ");
 
     frame.render_stateful_widget(list, inner, &mut app.branch_list_state);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" select  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" cancel", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        ])).alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+    );
 }
 
 fn render_delete_dialog(frame: &mut Frame, app: &App) {
