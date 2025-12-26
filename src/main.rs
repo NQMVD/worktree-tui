@@ -3,7 +3,10 @@
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind, MouseButton},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -341,15 +344,23 @@ impl App {
         match self.sort_order {
             SortOrder::Name => {
                 self.worktrees.sort_by(|a, b| {
-                    if a.is_main { return std::cmp::Ordering::Less; }
-                    if b.is_main { return std::cmp::Ordering::Greater; }
+                    if a.is_main {
+                        return std::cmp::Ordering::Less;
+                    }
+                    if b.is_main {
+                        return std::cmp::Ordering::Greater;
+                    }
                     a.branch.cmp(&b.branch)
                 });
             }
             SortOrder::Status => {
                 self.worktrees.sort_by(|a, b| {
-                    if a.is_main { return std::cmp::Ordering::Less; }
-                    if b.is_main { return std::cmp::Ordering::Greater; }
+                    if a.is_main {
+                        return std::cmp::Ordering::Less;
+                    }
+                    if b.is_main {
+                        return std::cmp::Ordering::Greater;
+                    }
                     let a_dirty = !a.status.is_clean();
                     let b_dirty = !b.status.is_clean();
                     b_dirty.cmp(&a_dirty).then_with(|| a.branch.cmp(&b.branch))
@@ -357,8 +368,12 @@ impl App {
             }
             SortOrder::Recent => {
                 self.worktrees.sort_by(|a, b| {
-                    if a.is_main { return std::cmp::Ordering::Less; }
-                    if b.is_main { return std::cmp::Ordering::Greater; }
+                    if a.is_main {
+                        return std::cmp::Ordering::Less;
+                    }
+                    if b.is_main {
+                        return std::cmp::Ordering::Greater;
+                    }
                     b.commit_time.cmp(&a.commit_time)
                 });
             }
@@ -437,13 +452,21 @@ impl App {
             if output.status.success() {
                 let content = String::from_utf8_lossy(&output.stdout);
                 for line in content.lines() {
-                    if line.len() < 2 { continue; }
+                    if line.len() < 2 {
+                        continue;
+                    }
                     let index = line.chars().next().unwrap();
                     let worktree = line.chars().nth(1).unwrap();
 
-                    if index != ' ' && index != '?' { status.staged += 1; }
-                    if worktree == 'M' || worktree == 'D' { status.modified += 1; }
-                    if index == '?' { status.untracked += 1; }
+                    if index != ' ' && index != '?' {
+                        status.staged += 1;
+                    }
+                    if worktree == 'M' || worktree == 'D' {
+                        status.modified += 1;
+                    }
+                    if index == '?' {
+                        status.untracked += 1;
+                    }
                 }
             }
         }
@@ -583,7 +606,9 @@ impl App {
 
     fn move_selection(&mut self, delta: i32) {
         let len = self.filtered_indices.len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
 
         let current = self.table_state.selected().unwrap_or(0);
         let new = if delta > 0 {
@@ -602,7 +627,8 @@ impl App {
 
     fn select_last(&mut self) {
         if !self.filtered_indices.is_empty() {
-            self.table_state.select(Some(self.filtered_indices.len() - 1));
+            self.table_state
+                .select(Some(self.filtered_indices.len() - 1));
         }
     }
 
@@ -614,14 +640,23 @@ impl App {
             .enumerate()
             .filter(|(_, wt)| {
                 wt.path.to_string_lossy().to_lowercase().contains(&query)
-                    || wt.branch.as_ref().map(|b| b.to_lowercase().contains(&query)).unwrap_or(false)
+                    || wt
+                        .branch
+                        .as_ref()
+                        .map(|b| b.to_lowercase().contains(&query))
+                        .unwrap_or(false)
                     || wt.commit_message.to_lowercase().contains(&query)
             })
             .map(|(i, _)| i)
             .collect();
 
         if self.table_state.selected().unwrap_or(0) >= self.filtered_indices.len() {
-            self.table_state.select(if self.filtered_indices.is_empty() { None } else { Some(0) });
+            self.table_state
+                .select(if self.filtered_indices.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
         }
     }
 
@@ -641,15 +676,18 @@ impl App {
 
         // Create worktrees in PROJECT-worktrees/ directory
         let worktrees_dir = self.get_worktrees_dir();
-        
+
         // Ensure the worktrees directory exists
         if !worktrees_dir.exists() {
             if let Err(e) = std::fs::create_dir_all(&worktrees_dir) {
-                self.set_status(&format!("Failed to create worktrees dir: {}", e), MessageLevel::Error);
+                self.set_status(
+                    &format!("Failed to create worktrees dir: {}", e),
+                    MessageLevel::Error,
+                );
                 return Ok(());
             }
         }
-        
+
         let worktree_path = worktrees_dir.join(name);
 
         let mut args = vec!["worktree", "add"];
@@ -671,7 +709,10 @@ impl App {
             .output()?;
 
         if output.status.success() {
-            self.set_status(&format!("Created worktree: {}", name), MessageLevel::Success);
+            self.set_status(
+                &format!("Created worktree: {}", name),
+                MessageLevel::Success,
+            );
             self.refresh_worktrees()?;
         } else {
             let error = String::from_utf8_lossy(&output.stderr);
@@ -696,7 +737,9 @@ impl App {
             let force = !wt.status.is_clean();
 
             let mut args = vec!["worktree", "remove"];
-            if force { args.push("--force"); }
+            if force {
+                args.push("--force");
+            }
             args.push(&path);
 
             let output = Command::new("git")
@@ -705,7 +748,10 @@ impl App {
                 .output()?;
 
             if output.status.success() {
-                self.set_status(&format!("Deleted worktree: {}", wt.branch.unwrap_or(path)), MessageLevel::Success);
+                self.set_status(
+                    &format!("Deleted worktree: {}", wt.branch.unwrap_or(path)),
+                    MessageLevel::Success,
+                );
                 self.refresh_worktrees()?;
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);
@@ -721,7 +767,7 @@ impl App {
     fn copy_path_to_clipboard(&mut self) {
         if let Some(wt) = self.selected_worktree() {
             let path = wt.path.to_string_lossy().to_string();
-            
+
             #[cfg(target_os = "macos")]
             let result = Command::new("pbcopy")
                 .stdin(std::process::Stdio::piped())
@@ -760,9 +806,9 @@ impl App {
                 });
 
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            let result: Result<std::process::ExitStatus, std::io::Error> = Err(std::io::Error::new(
-                std::io::ErrorKind::Other, "Clipboard not supported",
-            ));
+            let result: Result<std::process::ExitStatus, std::io::Error> = Err(
+                std::io::Error::new(std::io::ErrorKind::Other, "Clipboard not supported"),
+            );
 
             match result {
                 Ok(_) => self.set_status(&format!("Copied: {}", path), MessageLevel::Success),
@@ -774,7 +820,7 @@ impl App {
     fn open_in_file_manager(&mut self) {
         if let Some(wt) = self.selected_worktree() {
             let path = wt.path.to_string_lossy().to_string();
-            
+
             #[cfg(target_os = "macos")]
             let result = Command::new("open").arg(&path).spawn();
 
@@ -786,7 +832,8 @@ impl App {
 
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             let result: Result<std::process::Child, std::io::Error> = Err(std::io::Error::new(
-                std::io::ErrorKind::Other, "File manager not supported",
+                std::io::ErrorKind::Other,
+                "File manager not supported",
             ));
 
             match result {
@@ -808,7 +855,11 @@ impl App {
 
             if output.status.success() {
                 self.set_status(
-                    &format!("{} worktree: {}", if wt.is_locked { "Unlocked" } else { "Locked" }, wt.branch.unwrap_or(path)),
+                    &format!(
+                        "{} worktree: {}",
+                        if wt.is_locked { "Unlocked" } else { "Locked" },
+                        wt.branch.unwrap_or(path)
+                    ),
                     MessageLevel::Success,
                 );
                 self.refresh_worktrees()?;
@@ -822,7 +873,7 @@ impl App {
 
     fn fetch_all(&mut self) -> Result<()> {
         self.set_status("Fetching from remote...", MessageLevel::Info);
-        
+
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["fetch", "--all", "--prune"])
@@ -840,18 +891,24 @@ impl App {
     fn pull_current(&mut self) -> Result<()> {
         if let Some(wt) = self.selected_worktree().cloned() {
             self.set_status("Pulling...", MessageLevel::Info);
-            
+
             let output = Command::new("git")
                 .current_dir(&wt.path)
                 .args(["pull"])
                 .output()?;
 
             if output.status.success() {
-                self.set_status(&format!("Pulled {}", wt.branch.unwrap_or_else(|| "worktree".into())), MessageLevel::Success);
+                self.set_status(
+                    &format!("Pulled {}", wt.branch.unwrap_or_else(|| "worktree".into())),
+                    MessageLevel::Success,
+                );
                 self.refresh_worktrees()?;
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);
-                self.set_status(&format!("Pull failed: {}", error.trim()), MessageLevel::Error);
+                self.set_status(
+                    &format!("Pull failed: {}", error.trim()),
+                    MessageLevel::Error,
+                );
             }
         }
         Ok(())
@@ -860,18 +917,24 @@ impl App {
     fn push_current(&mut self) -> Result<()> {
         if let Some(wt) = self.selected_worktree().cloned() {
             self.set_status("Pushing...", MessageLevel::Info);
-            
+
             let output = Command::new("git")
                 .current_dir(&wt.path)
                 .args(["push"])
                 .output()?;
 
             if output.status.success() {
-                self.set_status(&format!("Pushed {}", wt.branch.unwrap_or_else(|| "worktree".into())), MessageLevel::Success);
+                self.set_status(
+                    &format!("Pushed {}", wt.branch.unwrap_or_else(|| "worktree".into())),
+                    MessageLevel::Success,
+                );
                 self.refresh_worktrees()?;
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);
-                self.set_status(&format!("Push failed: {}", error.trim()), MessageLevel::Error);
+                self.set_status(
+                    &format!("Push failed: {}", error.trim()),
+                    MessageLevel::Error,
+                );
             }
         }
         Ok(())
@@ -879,7 +942,7 @@ impl App {
 
     fn prune_worktrees(&mut self) -> Result<()> {
         self.set_status("Pruning stale worktrees...", MessageLevel::Info);
-        
+
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["worktree", "prune"])
@@ -907,7 +970,9 @@ impl App {
         }
 
         // Find a worktree where target_branch is checked out
-        let target_wt_path = self.worktrees.iter()
+        let target_wt_path = self
+            .worktrees
+            .iter()
             .find(|wt| wt.branch.as_ref() == Some(&target_branch))
             .map(|wt| wt.path.clone());
 
@@ -917,12 +982,18 @@ impl App {
                 // If not found, we could potentially try to merge in the main repo
                 // if the main repo can switch to that branch.
                 // For now, let's just support merging into active worktrees.
-                self.set_status(&format!("Branch {} is not active in any worktree", target_branch), MessageLevel::Error);
+                self.set_status(
+                    &format!("Branch {} is not active in any worktree", target_branch),
+                    MessageLevel::Error,
+                );
                 return Ok(());
             }
         };
 
-        self.set_status(&format!("Merging {} into {}...", source_branch, target_branch), MessageLevel::Info);
+        self.set_status(
+            &format!("Merging {} into {}...", source_branch, target_branch),
+            MessageLevel::Info,
+        );
 
         let output = Command::new("git")
             .current_dir(&merge_path)
@@ -938,9 +1009,15 @@ impl App {
         } else {
             let error = String::from_utf8_lossy(&output.stderr);
             if error.contains("CONFLICT") || error.contains("conflict") {
-                self.set_status(&format!("Conflict! Resolve in: {}", merge_path.display()), MessageLevel::Warning);
+                self.set_status(
+                    &format!("Conflict! Resolve in: {}", merge_path.display()),
+                    MessageLevel::Warning,
+                );
             } else {
-                self.set_status(&format!("Merge failed: {}", error.trim()), MessageLevel::Error);
+                self.set_status(
+                    &format!("Merge failed: {}", error.trim()),
+                    MessageLevel::Error,
+                );
             }
         }
         Ok(())
@@ -982,7 +1059,7 @@ impl App {
     fn refresh_merge_branches(&mut self) {
         let mut branches = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        
+
         for wt in &self.worktrees {
             if let Some(ref name) = wt.branch {
                 if seen.insert(name.clone()) {
@@ -994,14 +1071,18 @@ impl App {
                 }
             }
         }
-        
+
         // Sort active branches: main/master first, then alphabetically
         branches.sort_by(|a, b| {
             let a_is_main = a.name == "main" || a.name == "master";
             let b_is_main = b.name == "main" || b.name == "master";
-            if a_is_main && !b_is_main { std::cmp::Ordering::Less }
-            else if !a_is_main && b_is_main { std::cmp::Ordering::Greater }
-            else { a.name.cmp(&b.name) }
+            if a_is_main && !b_is_main {
+                std::cmp::Ordering::Less
+            } else if !a_is_main && b_is_main {
+                std::cmp::Ordering::Greater
+            } else {
+                a.name.cmp(&b.name)
+            }
         });
 
         self.available_branches = branches;
@@ -1014,7 +1095,10 @@ impl App {
         if !self.search_query.is_empty() {
             self.update_search_filter();
         }
-        self.set_status(&format!("Sorted by {}", self.sort_order.label()), MessageLevel::Info);
+        self.set_status(
+            &format!("Sorted by {}", self.sort_order.label()),
+            MessageLevel::Info,
+        );
     }
 }
 
@@ -1025,17 +1109,15 @@ impl App {
 fn handle_events(app: &mut App) -> Result<bool> {
     if event::poll(Duration::from_millis(100))? {
         match event::read()? {
-            Event::Key(key) => {
-                match app.mode {
-                    AppMode::Normal => handle_normal_mode(app, key.code, key.modifiers)?,
-                    AppMode::Help => handle_help_mode(app, key.code)?,
-                    AppMode::Create => handle_create_mode(app, key.code, key.modifiers)?,
-                    AppMode::Delete => handle_delete_mode(app, key.code)?,
-                    AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
-                    AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
-                    AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
-                }
-            }
+            Event::Key(key) => match app.mode {
+                AppMode::Normal => handle_normal_mode(app, key.code, key.modifiers)?,
+                AppMode::Help => handle_help_mode(app, key.code)?,
+                AppMode::Create => handle_create_mode(app, key.code, key.modifiers)?,
+                AppMode::Delete => handle_delete_mode(app, key.code)?,
+                AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
+                AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
+                AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
+            },
             Event::Mouse(mouse) => {
                 handle_mouse_event(app, mouse)?;
             }
@@ -1047,17 +1129,21 @@ fn handle_events(app: &mut App) -> Result<bool> {
 }
 
 fn handle_mouse_event(app: &mut App, mouse: crossterm::event::MouseEvent) -> Result<()> {
-    if app.mode != AppMode::Normal { return Ok(()); }
+    if app.mode != AppMode::Normal {
+        return Ok(());
+    }
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(area) = app.list_area {
-                if mouse.column >= area.x && mouse.column < area.x + area.width
-                    && mouse.row >= area.y && mouse.row < area.y + area.height
+                if mouse.column >= area.x
+                    && mouse.column < area.x + area.width
+                    && mouse.row >= area.y
+                    && mouse.row < area.y + area.height
                 {
                     let row_offset = mouse.row.saturating_sub(area.y + 3);
                     let clicked_index = row_offset as usize;
-                    
+
                     if clicked_index < app.filtered_indices.len() {
                         app.table_state.select(Some(clicked_index));
                     }
@@ -1120,28 +1206,43 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         }
         KeyCode::Enter | KeyCode::Char('o') => {
             if let Some(wt) = app.selected_worktree() {
-                app.set_status(&format!("Path: {}", wt.path.to_string_lossy()), MessageLevel::Info);
+                app.set_status(
+                    &format!("Path: {}", wt.path.to_string_lossy()),
+                    MessageLevel::Info,
+                );
             }
         }
 
         // New features
         KeyCode::Char('y') => app.copy_path_to_clipboard(),
         KeyCode::Char('O') => app.open_in_file_manager(),
-        KeyCode::Char('p') => { let _ = app.pull_current(); }
-        KeyCode::Char('P') => { let _ = app.push_current(); }
+        KeyCode::Char('p') => {
+            let _ = app.pull_current();
+        }
+        KeyCode::Char('P') => {
+            let _ = app.push_current();
+        }
         KeyCode::Char('s') => app.cycle_sort(),
         KeyCode::Char('t') => app.show_recent_commits = !app.show_recent_commits,
-        KeyCode::Char('L') => { let _ = app.toggle_lock(); }
-        KeyCode::Char('r') | KeyCode::Char('R') => { let _ = app.refresh_worktrees(); }
-        KeyCode::Char('F') => { let _ = app.fetch_all(); }
-        KeyCode::Char('X') => { let _ = app.prune_worktrees(); }
+        KeyCode::Char('L') => {
+            let _ = app.toggle_lock();
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            let _ = app.refresh_worktrees();
+        }
+        KeyCode::Char('F') => {
+            let _ = app.fetch_all();
+        }
+        KeyCode::Char('X') => {
+            let _ = app.prune_worktrees();
+        }
         KeyCode::Char('m') => {
             if let Some(wt) = app.selected_worktree() {
                 if wt.is_main && wt.branch.as_deref() == Some(&app.get_main_branch_name()) {
-                    // It's the main branch in the main worktree, 
+                    // It's the main branch in the main worktree,
                     // we can allow merging from it if the user wants to merge into something else.
                 }
-                
+
                 if wt.branch.is_none() {
                     app.set_status("Cannot merge detached HEAD", MessageLevel::Error);
                 } else {
@@ -1272,7 +1373,11 @@ fn handle_branch_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
             let len = app.available_branches.len();
             if len > 0 {
                 let current = app.branch_list_state.selected().unwrap_or(0);
-                app.branch_list_state.select(Some(if current == 0 { len - 1 } else { current - 1 }));
+                app.branch_list_state.select(Some(if current == 0 {
+                    len - 1
+                } else {
+                    current - 1
+                }));
             }
         }
         _ => {}
@@ -1310,7 +1415,11 @@ fn handle_merge_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
             let len = app.available_branches.len();
             if len > 0 {
                 let current = app.branch_list_state.selected().unwrap_or(0);
-                app.branch_list_state.select(Some(if current == 0 { len - 1 } else { current - 1 }));
+                app.branch_list_state.select(Some(if current == 0 {
+                    len - 1
+                } else {
+                    current - 1
+                }));
             }
         }
         _ => {}
@@ -1357,6 +1466,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let title_block = Block::default()
         .borders(Borders::BOTTOM)
+        .border_type(BorderType::LightDoubleDashed)
         .border_style(Style::default().fg(colors::BORDER_INACTIVE))
         .padding(Padding::horizontal(1));
 
@@ -1372,27 +1482,41 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("  ", Style::default().fg(colors::CLAUDE_ORANGE)),
         Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM).bold()),
         Span::raw(" "),
-        Span::styled(&app.repo_name, Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        Span::styled(
+            &app.repo_name,
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ),
     ]);
     frame.render_widget(Paragraph::new(logo), header_layout[0]);
 
     let total = app.worktrees.len();
-    let dirty = app.worktrees.iter().filter(|w| !w.status.is_clean()).count();
-    
-    let mut stats_spans = vec![
-        Span::styled(format!("{} worktrees", total), Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-    ];
+    let dirty = app
+        .worktrees
+        .iter()
+        .filter(|w| !w.status.is_clean())
+        .count();
+
+    let mut stats_spans = vec![Span::styled(
+        format!("{} worktrees", total),
+        Style::default().fg(colors::CLAUDE_WARM_GRAY),
+    )];
     if dirty > 0 {
-        stats_spans.push(Span::styled(format!("  {} dirty", dirty), Style::default().fg(colors::WARNING)));
+        stats_spans.push(Span::styled(
+            format!("  {} dirty", dirty),
+            Style::default().fg(colors::WARNING),
+        ));
     }
     stats_spans.extend([
         Span::raw("  "),
-        Span::styled(format!(" {}", app.sort_order.label()), Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        Span::styled(
+            format!(" {}", app.sort_order.label()),
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ),
         Span::raw("  "),
         Span::styled("?", Style::default().fg(colors::CLAUDE_ORANGE)),
         Span::styled(" help", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
     ]);
-    
+
     let stats = Line::from(stats_spans).alignment(Alignment::Right);
     frame.render_widget(Paragraph::new(stats), header_layout[1]);
 }
@@ -1409,16 +1533,31 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = Some(area);
-    
+
     let is_focused = app.focused_pane == FocusedPane::WorktreeList;
-    let border_color = if is_focused { colors::BORDER_ACTIVE } else { colors::BORDER_INACTIVE };
+    let border_color = if is_focused {
+        colors::BORDER_ACTIVE
+    } else {
+        colors::BORDER_INACTIVE
+    };
 
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Worktrees", Style::default()
-                .fg(if is_focused { colors::CLAUDE_ORANGE } else { colors::CLAUDE_CREAM })
-                .add_modifier(if is_focused { Modifier::BOLD } else { Modifier::empty() })),
+            Span::styled(
+                "Worktrees",
+                Style::default()
+                    .fg(if is_focused {
+                        colors::CLAUDE_ORANGE
+                    } else {
+                        colors::CLAUDE_CREAM
+                    })
+                    .add_modifier(if is_focused {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1431,44 +1570,64 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|h| Cell::from(*h).style(Style::default().fg(colors::CLAUDE_WARM_GRAY)));
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
-    let rows: Vec<Row> = app.filtered_indices.iter().enumerate().map(|(display_idx, &idx)| {
-        let wt = &app.worktrees[idx];
+    let rows: Vec<Row> = app
+        .filtered_indices
+        .iter()
+        .enumerate()
+        .map(|(display_idx, &idx)| {
+            let wt = &app.worktrees[idx];
 
-        let num = if display_idx < 9 {
-            Span::styled(format!("{}", display_idx + 1), Style::default().fg(colors::CLAUDE_WARM_GRAY))
-        } else {
-            Span::raw(" ")
-        };
+            let num = if display_idx < 9 {
+                Span::styled(
+                    format!("{}", display_idx + 1),
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                )
+            } else {
+                Span::raw(" ")
+            };
 
-        let icon = if wt.is_main {
-            Span::styled("", Style::default().fg(colors::CLAUDE_ORANGE))
-        } else if wt.is_locked {
-            Span::styled("", Style::default().fg(colors::WARNING))
-        } else if wt.is_prunable {
-            Span::styled("", Style::default().fg(colors::ERROR))
-        } else {
-            Span::styled("", Style::default().fg(colors::INFO))
-        };
+            let icon = if wt.is_main {
+                Span::styled("", Style::default().fg(colors::CLAUDE_ORANGE))
+            } else if wt.is_locked {
+                Span::styled("", Style::default().fg(colors::WARNING))
+            } else if wt.is_prunable {
+                Span::styled("", Style::default().fg(colors::ERROR))
+            } else {
+                Span::styled("", Style::default().fg(colors::INFO))
+            };
 
-        let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached { "(detached)" } else { "(bare)" });
-        let branch_style = if wt.is_main {
-            Style::default().fg(colors::CLAUDE_ORANGE).bold()
-        } else if wt.is_detached {
-            Style::default().fg(colors::WARNING)
-        } else {
-            Style::default().fg(colors::CLAUDE_CREAM)
-        };
+            let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached {
+                "(detached)"
+            } else {
+                "(bare)"
+            });
+            let branch_style = if wt.is_main {
+                Style::default().fg(colors::CLAUDE_ORANGE).bold()
+            } else if wt.is_detached {
+                Style::default().fg(colors::WARNING)
+            } else {
+                Style::default().fg(colors::CLAUDE_CREAM)
+            };
 
-        let status_style = if wt.status.is_clean() { Style::default().fg(colors::SUCCESS) } else { Style::default().fg(colors::WARNING) };
+            let status_style = if wt.status.is_clean() {
+                Style::default().fg(colors::SUCCESS)
+            } else {
+                Style::default().fg(colors::WARNING)
+            };
 
-        Row::new(vec![
-            Cell::from(num),
-            Cell::from(icon),
-            Cell::from(Span::styled(branch_name, branch_style)),
-            Cell::from(Span::styled(wt.status.summary(), status_style)),
-            Cell::from(Span::styled(&wt.commit_short, Style::default().fg(colors::CLAUDE_WARM_GRAY))),
-        ]).height(1)
-    }).collect();
+            Row::new(vec![
+                Cell::from(num),
+                Cell::from(icon),
+                Cell::from(Span::styled(branch_name, branch_style)),
+                Cell::from(Span::styled(wt.status.summary(), status_style)),
+                Cell::from(Span::styled(
+                    &wt.commit_short,
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                )),
+            ])
+            .height(1)
+        })
+        .collect();
 
     let widths = [
         Constraint::Length(2),
@@ -1481,7 +1640,11 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .row_highlight_style(Style::default().bg(colors::SELECTION_BG).add_modifier(Modifier::BOLD))
+        .row_highlight_style(
+            Style::default()
+                .bg(colors::SELECTION_BG)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol(" ");
 
     frame.render_stateful_widget(table, area, &mut app.table_state);
@@ -1493,20 +1656,42 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
             .end_symbol(Some(""));
         let mut scrollbar_state = ScrollbarState::new(app.filtered_indices.len())
             .position(app.table_state.selected().unwrap_or(0));
-        frame.render_stateful_widget(scrollbar, area.inner(Margin { vertical: 1, horizontal: 0 }), &mut scrollbar_state);
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
     }
 }
 
 fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focused_pane == FocusedPane::Details;
-    let border_color = if is_focused { colors::BORDER_ACTIVE } else { colors::BORDER_INACTIVE };
+    let border_color = if is_focused {
+        colors::BORDER_ACTIVE
+    } else {
+        colors::BORDER_INACTIVE
+    };
 
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Details", Style::default()
-                .fg(if is_focused { colors::CLAUDE_ORANGE } else { colors::CLAUDE_CREAM })
-                .add_modifier(if is_focused { Modifier::BOLD } else { Modifier::empty() })),
+            Span::styled(
+                "Details",
+                Style::default()
+                    .fg(if is_focused {
+                        colors::CLAUDE_ORANGE
+                    } else {
+                        colors::CLAUDE_CREAM
+                    })
+                    .add_modifier(if is_focused {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1522,27 +1707,43 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
 
         lines.push(Line::from(vec![
             Span::styled("Branch    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(wt.branch.as_deref().unwrap_or("(detached)"), Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(
+                wt.branch.as_deref().unwrap_or("(detached)"),
+                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+            ),
         ]));
         lines.push(Line::raw(""));
 
         lines.push(Line::from(vec![
             Span::styled("Path      ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(truncate_path(&wt.path, inner.width.saturating_sub(12) as usize), Style::default().fg(colors::CLAUDE_CREAM)),
+            Span::styled(
+                truncate_path(&wt.path, inner.width.saturating_sub(12) as usize),
+                Style::default().fg(colors::CLAUDE_CREAM),
+            ),
         ]));
         lines.push(Line::raw(""));
 
-        let time_ago = wt.recent_commits.first().map(|c| c.time_ago.clone()).unwrap_or_default();
+        let time_ago = wt
+            .recent_commits
+            .first()
+            .map(|c| c.time_ago.clone())
+            .unwrap_or_default();
         lines.push(Line::from(vec![
             Span::styled("Commit    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled(&wt.commit_short, Style::default().fg(colors::INFO)),
-            Span::styled(format!("  {}", time_ago), Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+            Span::styled(
+                format!("  {}", time_ago),
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ),
         ]));
 
         if !wt.commit_message.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("          "),
-                Span::styled(truncate_str(&wt.commit_message, inner.width.saturating_sub(12) as usize), Style::default().fg(colors::CLAUDE_CREAM).italic()),
+                Span::styled(
+                    truncate_str(&wt.commit_message, inner.width.saturating_sub(12) as usize),
+                    Style::default().fg(colors::CLAUDE_CREAM).italic(),
+                ),
             ]));
         }
         lines.push(Line::raw(""));
@@ -1558,20 +1759,63 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
 
         if !wt.status.is_clean() || wt.status.ahead > 0 || wt.status.behind > 0 {
             let mut status_spans = vec![Span::raw("          ")];
-            if wt.status.staged > 0 { status_spans.push(Span::styled(format!(" +{} ", wt.status.staged), Style::default().fg(colors::SUCCESS))); }
-            if wt.status.modified > 0 { status_spans.push(Span::styled(format!(" ~{} ", wt.status.modified), Style::default().fg(colors::WARNING))); }
-            if wt.status.untracked > 0 { status_spans.push(Span::styled(format!(" ?{} ", wt.status.untracked), Style::default().fg(colors::CLAUDE_WARM_GRAY))); }
-            if wt.status.ahead > 0 { status_spans.push(Span::styled(format!(" {} ", wt.status.ahead), Style::default().fg(colors::SUCCESS))); }
-            if wt.status.behind > 0 { status_spans.push(Span::styled(format!(" {} ", wt.status.behind), Style::default().fg(colors::ERROR))); }
+            if wt.status.staged > 0 {
+                status_spans.push(Span::styled(
+                    format!(" +{} ", wt.status.staged),
+                    Style::default().fg(colors::SUCCESS),
+                ));
+            }
+            if wt.status.modified > 0 {
+                status_spans.push(Span::styled(
+                    format!(" ~{} ", wt.status.modified),
+                    Style::default().fg(colors::WARNING),
+                ));
+            }
+            if wt.status.untracked > 0 {
+                status_spans.push(Span::styled(
+                    format!(" ?{} ", wt.status.untracked),
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                ));
+            }
+            if wt.status.ahead > 0 {
+                status_spans.push(Span::styled(
+                    format!(" {} ", wt.status.ahead),
+                    Style::default().fg(colors::SUCCESS),
+                ));
+            }
+            if wt.status.behind > 0 {
+                status_spans.push(Span::styled(
+                    format!(" {} ", wt.status.behind),
+                    Style::default().fg(colors::ERROR),
+                ));
+            }
             lines.push(Line::from(status_spans));
         }
         lines.push(Line::raw(""));
 
         if wt.is_main || wt.is_locked || wt.is_prunable {
-            let mut flag_spans = vec![Span::styled("Flags     ", Style::default().fg(colors::CLAUDE_WARM_GRAY))];
-            if wt.is_main { flag_spans.push(Span::styled(" main ", Style::default().fg(colors::CLAUDE_ORANGE))); }
-            if wt.is_locked { flag_spans.push(Span::styled("  locked ", Style::default().fg(colors::WARNING))); }
-            if wt.is_prunable { flag_spans.push(Span::styled(" prunable ", Style::default().fg(colors::ERROR))); }
+            let mut flag_spans = vec![Span::styled(
+                "Flags     ",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            )];
+            if wt.is_main {
+                flag_spans.push(Span::styled(
+                    " main ",
+                    Style::default().fg(colors::CLAUDE_ORANGE),
+                ));
+            }
+            if wt.is_locked {
+                flag_spans.push(Span::styled(
+                    "  locked ",
+                    Style::default().fg(colors::WARNING),
+                ));
+            }
+            if wt.is_prunable {
+                flag_spans.push(Span::styled(
+                    " prunable ",
+                    Style::default().fg(colors::ERROR),
+                ));
+            }
             lines.push(Line::from(flag_spans));
             lines.push(Line::raw(""));
         }
@@ -1579,7 +1823,10 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         if app.show_recent_commits && !wt.recent_commits.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled("Recent    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-                Span::styled("commits (t to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+                Span::styled(
+                    "commits (t to toggle)",
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+                ),
             ]));
             lines.push(Line::raw(""));
 
@@ -1587,11 +1834,17 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(&commit.hash, Style::default().fg(colors::PURPLE)),
                     Span::raw(" "),
-                    Span::styled(truncate_str(&commit.message, inner.width.saturating_sub(18) as usize), Style::default().fg(colors::CLAUDE_CREAM)),
+                    Span::styled(
+                        truncate_str(&commit.message, inner.width.saturating_sub(18) as usize),
+                        Style::default().fg(colors::CLAUDE_CREAM),
+                    ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::raw("        "),
-                    Span::styled(&commit.time_ago, Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+                    Span::styled(
+                        &commit.time_ago,
+                        Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+                    ),
                 ]));
             }
         }
@@ -1599,8 +1852,11 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     } else {
         frame.render_widget(
-            Paragraph::new(Span::styled("No worktree selected", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()))
-                .alignment(Alignment::Center),
+            Paragraph::new(Span::styled(
+                "No worktree selected",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ))
+            .alignment(Alignment::Center),
             inner,
         );
     }
@@ -1609,6 +1865,7 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::TOP)
+        .border_type(BorderType::LightDoubleDashed)
         .border_style(Style::default().fg(colors::BORDER_INACTIVE));
 
     let inner = block.inner(area);
@@ -1621,17 +1878,30 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let mode_hints = match app.mode {
         AppMode::Normal => vec![
-            ("j/k", "nav"), ("1-9", "jump"), ("y", "copy"), ("p/P", "pull/push"),
-            ("m", "merge"), ("s", "sort"), ("/", "search"),
+            ("j/k", "nav"),
+            ("1-9", "jump"),
+            ("y", "copy"),
+            ("p/P", "pull/push"),
+            ("m", "merge"),
+            ("s", "sort"),
+            ("/", "search"),
         ],
         AppMode::Search => vec![("Enter", "confirm"), ("Esc", "cancel")],
         _ => vec![("Esc", "cancel")],
     };
 
-    let hints: Vec<Span> = mode_hints.iter().flat_map(|(key, action)| vec![
-        Span::styled(*key, Style::default().fg(colors::CLAUDE_ORANGE)),
-        Span::styled(format!(" {}  ", action), Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-    ]).collect();
+    let hints: Vec<Span> = mode_hints
+        .iter()
+        .flat_map(|(key, action)| {
+            vec![
+                Span::styled(*key, Style::default().fg(colors::CLAUDE_ORANGE)),
+                Span::styled(
+                    format!(" {}  ", action),
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                ),
+            ]
+        })
+        .collect();
 
     frame.render_widget(
         Paragraph::new(Line::from(hints)),
@@ -1646,7 +1916,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             MessageLevel::Error => colors::ERROR,
         };
         frame.render_widget(
-            Paragraph::new(Span::styled(&msg.text, Style::default().fg(color))).alignment(Alignment::Right),
+            Paragraph::new(Span::styled(&msg.text, Style::default().fg(color)))
+                .alignment(Alignment::Right),
             Rect::new(layout[1].x, layout[1].y, layout[1].width - 1, 1),
         );
     }
@@ -1659,7 +1930,10 @@ fn render_help_dialog(frame: &mut Frame) {
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Keyboard Shortcuts", Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(
+                "Keyboard Shortcuts",
+                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+            ),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1672,46 +1946,61 @@ fn render_help_dialog(frame: &mut Frame) {
     frame.render_widget(block, area);
 
     let help_text = vec![
-        ("Navigation", vec![
-            "j/k /        Move down/up",
-            "g / G            Go to first/last",
-            "1-9              Jump to item",
-            "Ctrl+d/u         Page down/up",
-            "Tab              Switch pane",
-        ]),
-        ("Git Operations", vec![
-            "c / a            Create worktree",
-            "x / Del          Delete worktree",
-            "L                Toggle lock",
-            "p                Pull (in worktree)",
-            "P                Push (from worktree)",
-            "F                Fetch all remotes",
-            "r / R            Refresh list",
-            "X                Prune stale",
-            "m                Merge branch",
-        ]),
-        ("Utilities", vec![
-            "y                Copy path to clipboard",
-            "O                Open in file manager",
-            "s                Cycle sort order",
-            "t                Toggle recent commits",
-            "/                Search worktrees",
-            "?                Toggle this help",
-            "q / Esc          Quit",
-        ]),
+        (
+            "Navigation",
+            vec![
+                "j/k /        Move down/up",
+                "g / G            Go to first/last",
+                "1-9              Jump to item",
+                "Ctrl+d/u         Page down/up",
+                "Tab              Switch pane",
+            ],
+        ),
+        (
+            "Git Operations",
+            vec![
+                "c / a            Create worktree",
+                "x / Del          Delete worktree",
+                "L                Toggle lock",
+                "p                Pull (in worktree)",
+                "P                Push (from worktree)",
+                "F                Fetch all remotes",
+                "r / R            Refresh list",
+                "X                Prune stale",
+                "m                Merge branch",
+            ],
+        ),
+        (
+            "Utilities",
+            vec![
+                "y                Copy path to clipboard",
+                "O                Open in file manager",
+                "s                Cycle sort order",
+                "t                Toggle recent commits",
+                "/                Search worktrees",
+                "?                Toggle this help",
+                "q / Esc          Quit",
+            ],
+        ),
     ];
 
     let mut y = 0;
     for (section, items) in help_text {
         frame.render_widget(
-            Paragraph::new(Span::styled(section, Style::default().fg(colors::CLAUDE_CREAM).bold())),
+            Paragraph::new(Span::styled(
+                section,
+                Style::default().fg(colors::CLAUDE_CREAM).bold(),
+            )),
             Rect::new(inner.x, inner.y + y, inner.width, 1),
         );
         y += 1;
 
         for item in items {
             frame.render_widget(
-                Paragraph::new(Span::styled(format!("  {}", item), Style::default().fg(colors::CLAUDE_WARM_GRAY))),
+                Paragraph::new(Span::styled(
+                    format!("  {}", item),
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                )),
                 Rect::new(inner.x, inner.y + y, inner.width, 1),
             );
             y += 1;
@@ -1720,8 +2009,11 @@ fn render_help_dialog(frame: &mut Frame) {
     }
 
     frame.render_widget(
-        Paragraph::new(Span::styled("Press Esc or ? to close", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()))
-            .alignment(Alignment::Center),
+        Paragraph::new(Span::styled(
+            "Press Esc or ? to close",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+        ))
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
     );
 }
@@ -1733,7 +2025,10 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Create Worktree", Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(
+                "Create Worktree",
+                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+            ),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1746,7 +2041,10 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
     frame.render_widget(block, area);
 
     frame.render_widget(
-        Paragraph::new(Span::styled("Worktree name:", Style::default().fg(colors::CLAUDE_CREAM))),
+        Paragraph::new(Span::styled(
+            "Worktree name:",
+            Style::default().fg(colors::CLAUDE_CREAM),
+        )),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
 
@@ -1754,21 +2052,35 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if app.mode == AppMode::Create { colors::CLAUDE_ORANGE } else { colors::BORDER_INACTIVE }));
-    
+        .border_style(Style::default().fg(if app.mode == AppMode::Create {
+            colors::CLAUDE_ORANGE
+        } else {
+            colors::BORDER_INACTIVE
+        }));
+
     frame.render_widget(
-        Paragraph::new(app.create_input.as_str()).block(input_block).style(Style::default().fg(colors::CLAUDE_CREAM)),
+        Paragraph::new(app.create_input.as_str())
+            .block(input_block)
+            .style(Style::default().fg(colors::CLAUDE_CREAM)),
         input_area,
     );
 
     if app.mode == AppMode::Create {
-        frame.set_cursor_position((input_area.x + app.create_cursor as u16 + 1, input_area.y + 1));
+        frame.set_cursor_position((
+            input_area.x + app.create_cursor as u16 + 1,
+            input_area.y + 1,
+        ));
     }
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("Base branch: ", Style::default().fg(colors::CLAUDE_CREAM)),
-            Span::styled(app.create_from_branch.as_deref().unwrap_or("HEAD (current)"), Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(
+                app.create_from_branch
+                    .as_deref()
+                    .unwrap_or("HEAD (current)"),
+                Style::default().fg(colors::CLAUDE_ORANGE),
+            ),
         ])),
         Rect::new(inner.x, inner.y + 6, inner.width, 1),
     );
@@ -1781,7 +2093,8 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
             Span::styled(" create  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" cancel", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-        ])).alignment(Alignment::Center),
+        ]))
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
     );
 }
@@ -1805,20 +2118,37 @@ fn render_branch_select_dialog(frame: &mut Frame, app: &mut App, title: &str) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let items: Vec<ListItem> = app.available_branches.iter().map(|b| {
-        let style = if b.is_current {
-            Style::default().fg(colors::CLAUDE_ORANGE).bold()
-        } else if b.is_remote {
-            Style::default().fg(colors::INFO)
-        } else {
-            Style::default().fg(colors::CLAUDE_CREAM)
-        };
-        let prefix = if b.is_current { " " } else if b.is_remote { " " } else { "  " };
-        ListItem::new(Line::from(vec![Span::styled(prefix, style), Span::styled(&b.name, style)]))
-    }).collect();
+    let items: Vec<ListItem> = app
+        .available_branches
+        .iter()
+        .map(|b| {
+            let style = if b.is_current {
+                Style::default().fg(colors::CLAUDE_ORANGE).bold()
+            } else if b.is_remote {
+                Style::default().fg(colors::INFO)
+            } else {
+                Style::default().fg(colors::CLAUDE_CREAM)
+            };
+            let prefix = if b.is_current {
+                " "
+            } else if b.is_remote {
+                " "
+            } else {
+                "  "
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(&b.name, style),
+            ]))
+        })
+        .collect();
 
     let list = List::new(items)
-        .highlight_style(Style::default().bg(colors::SELECTION_BG).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(colors::SELECTION_BG)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol(" ");
 
     frame.render_stateful_widget(list, inner, &mut app.branch_list_state);
@@ -1829,7 +2159,8 @@ fn render_branch_select_dialog(frame: &mut Frame, app: &mut App, title: &str) {
             Span::styled(" select  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" cancel", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-        ])).alignment(Alignment::Center),
+        ]))
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
     );
 }
@@ -1838,7 +2169,10 @@ fn render_delete_dialog(frame: &mut Frame, app: &App) {
     let area = centered_rect(50, 25, frame.area());
     frame.render_widget(Clear, area);
 
-    let wt_name = app.selected_worktree().and_then(|w| w.branch.clone()).unwrap_or_else(|| "this worktree".into());
+    let wt_name = app
+        .selected_worktree()
+        .and_then(|w| w.branch.clone())
+        .unwrap_or_else(|| "this worktree".into());
 
     let block = Block::default()
         .title(Line::from(vec![
@@ -1858,29 +2192,50 @@ fn render_delete_dialog(frame: &mut Frame, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("Are you sure you want to delete ", Style::default().fg(colors::CLAUDE_CREAM)),
+                Span::styled(
+                    "Are you sure you want to delete ",
+                    Style::default().fg(colors::CLAUDE_CREAM),
+                ),
                 Span::styled(&wt_name, Style::default().fg(colors::CLAUDE_ORANGE).bold()),
                 Span::styled("?", Style::default().fg(colors::CLAUDE_CREAM)),
             ]),
             Line::raw(""),
-            Line::styled("This action cannot be undone.", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
-        ]).alignment(Alignment::Center),
+            Line::styled(
+                "This action cannot be undone.",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ),
+        ])
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + 1, inner.width, 3),
     );
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" y ", Style::default().fg(colors::CLAUDE_DARKER).bg(colors::ERROR)),
+            Span::styled(
+                " y ",
+                Style::default().fg(colors::CLAUDE_DARKER).bg(colors::ERROR),
+            ),
             Span::styled(" Yes  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(" n ", Style::default().fg(colors::CLAUDE_DARKER).bg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled(
+                " n ",
+                Style::default()
+                    .fg(colors::CLAUDE_DARKER)
+                    .bg(colors::CLAUDE_WARM_GRAY),
+            ),
             Span::styled(" No", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-        ])).alignment(Alignment::Center),
+        ]))
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 2, inner.width, 1),
     );
 }
 
 fn render_search_bar(frame: &mut Frame, app: &App) {
-    let area = Rect::new(frame.area().x + 1, frame.area().height - 4, frame.area().width - 2, 3);
+    let area = Rect::new(
+        frame.area().x + 1,
+        frame.area().height - 4,
+        frame.area().width - 2,
+        3,
+    );
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -1898,8 +2253,12 @@ fn render_search_bar(frame: &mut Frame, app: &App) {
     frame.render_widget(block, area);
 
     frame.render_widget(
-        Paragraph::new(format!("{}  ({} matches)", app.search_query, app.filtered_indices.len()))
-            .style(Style::default().fg(colors::CLAUDE_CREAM)),
+        Paragraph::new(format!(
+            "{}  ({} matches)",
+            app.search_query,
+            app.filtered_indices.len()
+        ))
+        .style(Style::default().fg(colors::CLAUDE_CREAM)),
         inner,
     );
 
@@ -1931,13 +2290,17 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.width() <= max_len { s.to_string() }
-    else {
+    if s.width() <= max_len {
+        s.to_string()
+    } else {
         let mut result = String::new();
         let mut width = 0;
         for c in s.chars() {
             let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if width + char_width + 3 > max_len { result.push_str("..."); break; }
+            if width + char_width + 3 > max_len {
+                result.push_str("...");
+                break;
+            }
             result.push(c);
             width += char_width;
         }
@@ -1947,8 +2310,11 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 
 fn truncate_path(path: &PathBuf, max_len: usize) -> String {
     let s = path.to_string_lossy();
-    if s.len() <= max_len { s.to_string() }
-    else { format!("...{}", &s[s.len().saturating_sub(max_len - 3)..]) }
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("...{}", &s[s.len().saturating_sub(max_len - 3)..])
+    }
 }
 
 // ============================================================================
@@ -1963,12 +2329,16 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let app_result = App::new();
-    
+
     let result = match app_result {
         Ok(mut app) => run_app(&mut terminal, &mut app),
         Err(e) => {
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
             terminal.show_cursor()?;
             eprintln!("Error: {}", e);
             eprintln!("\nMake sure you're running this from within a Git repository.");
@@ -1977,16 +2347,24 @@ fn main() -> Result<()> {
     };
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = result { eprintln!("Error: {:?}", err); }
+    if let Err(err) = result {
+        eprintln!("Error: {:?}", err);
+    }
     Ok(())
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
-        if handle_events(app)? { return Ok(()); }
+        if handle_events(app)? {
+            return Ok(());
+        }
     }
 }
