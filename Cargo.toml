@@ -1,0 +1,30 @@
+[package]
+name = "worktree-tui"
+version = "0.1.0"
+edition = "2021"
+description = "A beautiful Git worktree viewer and manager with Claude-inspired design"
+authors = ["Your Name"]
+license = "MIT"
+
+[dependencies]
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Date/time handling
+chrono = "0.4"
+
+# Unicode width for proper text display
+unicode-width = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
