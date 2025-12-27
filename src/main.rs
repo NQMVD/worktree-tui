@@ -46,7 +46,7 @@ mod colors {
 
     // Semantic colors
     pub const SUCCESS: Color = Color::Rgb(134, 239, 172);
-    pub const WARNING: Color = Color::Rgb(253, 224, 71);
+    pub const WARNING: Color = Color::Rgb(230 + 10, 185 + 30, 157 - 10);
     pub const ERROR: Color = Color::Rgb(248, 113, 113);
     pub const INFO: Color = Color::Rgb(147, 197, 253);
     pub const PURPLE: Color = Color::Rgb(196, 181, 253);
@@ -54,7 +54,7 @@ mod colors {
     // UI elements
     pub const BORDER_ACTIVE: Color = CLAUDE_ORANGE;
     pub const BORDER_INACTIVE: Color = Color::Rgb(68, 64, 60);
-    pub const SELECTION_BG: Color = Color::Rgb(38, 34, 30);
+    pub const SELECTION_BG: Color = Color::Rgb(34, 30, 26);
 }
 
 // ============================================================================
@@ -333,7 +333,11 @@ impl App {
 
         // Resolve to absolute path
         dunce::canonicalize(&main_repo_path).map_err(|e| {
-            anyhow::anyhow!("Failed to resolve git root path '{:?}': {}", main_repo_path, e)
+            anyhow::anyhow!(
+                "Failed to resolve git root path '{:?}': {}",
+                main_repo_path,
+                e
+            )
         })
     }
 
@@ -866,9 +870,10 @@ impl App {
             });
 
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        let result: Result<std::process::ExitStatus, std::io::Error> = Err(
-            std::io::Error::new(std::io::ErrorKind::Other, "Clipboard not supported"),
-        );
+        let result: Result<std::process::ExitStatus, std::io::Error> = Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Clipboard not supported",
+        ));
 
         match result {
             Ok(_) => {}
@@ -1242,13 +1247,7 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             }
         }
 
-        // Pane focus
-        KeyCode::Tab => {
-            app.focused_pane = match app.focused_pane {
-                FocusedPane::WorktreeList => FocusedPane::Details,
-                FocusedPane::Details => FocusedPane::WorktreeList,
-            };
-        }
+        KeyCode::Tab => {}
 
         // Actions
         KeyCode::Char('c') | KeyCode::Char('a') => {
@@ -1564,7 +1563,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 
     let logo = Line::from(vec![
         Span::styled("  ", Style::default().fg(colors::CLAUDE_ORANGE)),
-        Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM)),
+        Span::styled("Worktree TUI", Style::default().fg(colors::CLAUDE_CREAM)),
         Span::raw(" "),
         Span::styled(":: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
         Span::styled(
@@ -1574,23 +1573,46 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     ]);
     frame.render_widget(Paragraph::new(logo), header_layout[0]);
 
-    let total = app.worktrees.len();
-    let dirty = app
-        .worktrees
-        .iter()
-        .filter(|w| !w.status.is_clean())
-        .count();
+    // let total = app.worktrees.len();
+    // let dirty = app
+    //     .worktrees
+    //     .iter()
+    //     .filter(|w| !w.status.is_clean())
+    //     .count();
 
-    let mut stats_spans = vec![Span::styled(
-        format!("{} worktrees", total),
-        Style::default().fg(colors::CLAUDE_WARM_GRAY),
-    )];
-    if dirty > 0 {
-        stats_spans.push(Span::styled(
-            format!("  {} dirty", dirty),
-            Style::default().fg(colors::WARNING),
-        ));
-    }
+    // let mut stats_spans = vec![Span::styled(
+    //     format!("? untracked ~ modified + staged"),
+    //     Style::default().fg(colors::CLAUDE_WARM_GRAY),
+    // )];
+    let mut stats_spans = vec![
+        Span::styled(format!(" ? "), Style::default().fg(colors::CLAUDE_CREAM)),
+        Span::styled(
+            format!("untracked "),
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ),
+        Span::styled(format!(" ~ "), Style::default().fg(colors::CLAUDE_CREAM)),
+        Span::styled(
+            format!("modified "),
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ),
+        Span::styled(format!(" + "), Style::default().fg(colors::CLAUDE_CREAM)),
+        Span::styled(
+            format!("staged "),
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ),
+    ];
+
+    // let mut stats_spans = vec![Span::styled(
+    //     format!("{} worktrees", total),
+    //     Style::default().fg(colors::CLAUDE_WARM_GRAY),
+    // )];
+    // if dirty > 0 {
+    //     stats_spans.push(Span::styled(
+    //         format!("  {} dirty", dirty),
+    //         Style::default().fg(colors::WARNING),
+    //     ));
+    // }
+
     stats_spans.extend([
         Span::raw("  "),
         Span::styled(
@@ -1619,25 +1641,12 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = Some(area);
 
-    let is_focused = app.focused_pane == FocusedPane::WorktreeList;
-    let border_color = if is_focused {
-        colors::BORDER_ACTIVE
-    } else {
-        colors::BORDER_INACTIVE
-    };
+    let border_color = colors::BORDER_INACTIVE;
 
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "Worktrees",
-                Style::default()
-                    .fg(if is_focused {
-                        colors::CLAUDE_ORANGE
-                    } else {
-                        colors::CLAUDE_CREAM
-                    }),
-            ),
+            Span::styled("Worktrees", Style::default().fg(colors::CLAUDE_CREAM)),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1746,25 +1755,12 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.focused_pane == FocusedPane::Details;
-    let border_color = if is_focused {
-        colors::BORDER_ACTIVE
-    } else {
-        colors::BORDER_INACTIVE
-    };
+    let border_color = colors::BORDER_INACTIVE;
 
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "Details",
-                Style::default()
-                    .fg(if is_focused {
-                        colors::CLAUDE_ORANGE
-                    } else {
-                        colors::CLAUDE_CREAM
-                    }),
-            ),
+            Span::styled("Details", Style::default().fg(colors::CLAUDE_CREAM)),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -1779,7 +1775,11 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         let mut lines = Vec::new();
 
         // --- Identity & Status ---
-        let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached { "(detached)" } else { "(bare)" });
+        let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached {
+            "(detached)"
+        } else {
+            "(bare)"
+        });
         lines.push(Line::from(vec![
             Span::styled(branch_name, Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::raw(" "),
@@ -1794,71 +1794,130 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         if wt.status.is_clean() {
             status_spans.push(Span::styled("Clean", Style::default().fg(colors::SUCCESS)));
         } else {
-            status_spans.push(Span::styled("Modified", Style::default().fg(colors::WARNING)));
-            status_spans.push(Span::raw(" ("));
+            status_spans.push(Span::styled(
+                "Modified",
+                Style::default().fg(colors::WARNING),
+            ));
+            status_spans.push(Span::raw(" "));
             let mut parts = Vec::new();
-            if wt.status.staged > 0 { parts.push(Span::styled(format!("+{}", wt.status.staged), Style::default().fg(colors::SUCCESS))); }
-            if wt.status.modified > 0 { parts.push(Span::styled(format!("~{}", wt.status.modified), Style::default().fg(colors::WARNING))); }
-            if wt.status.untracked > 0 { parts.push(Span::styled(format!("?{}", wt.status.untracked), Style::default().fg(colors::CLAUDE_WARM_GRAY))); }
-            
+            if wt.status.staged > 0 {
+                parts.push(Span::styled(
+                    format!("+{}", wt.status.staged),
+                    Style::default().fg(colors::SUCCESS),
+                ));
+            }
+            if wt.status.modified > 0 {
+                parts.push(Span::styled(
+                    format!("~{}", wt.status.modified),
+                    Style::default().fg(colors::WARNING),
+                ));
+            }
+            if wt.status.untracked > 0 {
+                parts.push(Span::styled(
+                    format!("?{}", wt.status.untracked),
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                ));
+            }
+
             for (i, part) in parts.into_iter().enumerate() {
-                if i > 0 { status_spans.push(Span::raw(" ")); }
+                if i > 0 {
+                    status_spans.push(Span::raw(" "));
+                }
                 status_spans.push(part);
             }
-            status_spans.push(Span::raw(")"));
+            // status_spans.push(Span::raw(")"));
         }
-        
+
         if wt.status.ahead > 0 || wt.status.behind > 0 {
-            status_spans.push(Span::styled(" • ", Style::default().fg(colors::CLAUDE_WARM_GRAY)));
+            status_spans.push(Span::styled(
+                " • ",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            ));
             if wt.status.ahead > 0 {
-                status_spans.push(Span::styled(format!("↑{}", wt.status.ahead), Style::default().fg(colors::SUCCESS)));
-                if wt.status.behind > 0 { status_spans.push(Span::raw(" ")); }
+                status_spans.push(Span::styled(
+                    format!("↑{}", wt.status.ahead),
+                    Style::default().fg(colors::SUCCESS),
+                ));
+                if wt.status.behind > 0 {
+                    status_spans.push(Span::raw(" "));
+                }
             }
             if wt.status.behind > 0 {
-                status_spans.push(Span::styled(format!("↓{}", wt.status.behind), Style::default().fg(colors::ERROR)));
+                status_spans.push(Span::styled(
+                    format!("↓{}", wt.status.behind),
+                    Style::default().fg(colors::ERROR),
+                ));
             }
         }
         lines.push(Line::from(status_spans));
         lines.push(Line::raw(""));
 
         // --- Location ---
-        lines.push(Line::from(Span::styled("Location", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
+        lines.push(Line::from(Span::styled(
+            "Location",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        )));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(truncate_path(&wt.path, inner.width.saturating_sub(4) as usize), Style::default().fg(colors::CLAUDE_CREAM)),
+            Span::styled(
+                truncate_path(&wt.path, inner.width.saturating_sub(4) as usize),
+                Style::default().fg(colors::CLAUDE_CREAM),
+            ),
         ]));
         lines.push(Line::raw(""));
 
         // --- Current Commit ---
-        lines.push(Line::from(Span::styled("Current Commit", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
-        let time_ago = wt.recent_commits.first().map(|c| c.time_ago.clone()).unwrap_or_default();
+        lines.push(Line::from(Span::styled(
+            "Current Commit",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        )));
+        let time_ago = wt
+            .recent_commits
+            .first()
+            .map(|c| c.time_ago.clone())
+            .unwrap_or_default();
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(&wt.commit_short, Style::default().fg(colors::INFO)),
-            Span::styled(format!(" • {}", time_ago), Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+            Span::styled(
+                format!(" • {}", time_ago),
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ),
         ]));
-        
+
         if !wt.commit_message.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(&wt.commit_message, Style::default().fg(colors::CLAUDE_CREAM).italic()),
+                Span::styled(
+                    &wt.commit_message,
+                    Style::default().fg(colors::CLAUDE_CREAM).italic(),
+                ),
             ]));
         }
         lines.push(Line::raw(""));
 
         // --- Attributes ---
         if wt.is_locked || wt.is_prunable {
-            lines.push(Line::from(Span::styled("Attributes", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
+            lines.push(Line::from(Span::styled(
+                "Attributes",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            )));
             if wt.is_locked {
                 lines.push(Line::from(vec![
                     Span::raw("  Locked: "),
-                    Span::styled(wt.lock_reason.as_deref().unwrap_or("no reason provided"), Style::default().fg(colors::WARNING).italic()),
+                    Span::styled(
+                        wt.lock_reason.as_deref().unwrap_or("no reason provided"),
+                        Style::default().fg(colors::WARNING).italic(),
+                    ),
                 ]));
             }
             if wt.is_prunable {
                 lines.push(Line::from(vec![
                     Span::raw("  Prunable: "),
-                    Span::styled("Worktree path is missing or invalid", Style::default().fg(colors::ERROR).italic()),
+                    Span::styled(
+                        "Worktree path is missing or invalid",
+                        Style::default().fg(colors::ERROR).italic(),
+                    ),
                 ]));
             }
             lines.push(Line::raw(""));
@@ -1867,14 +1926,23 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         // --- History ---
         if app.show_recent_commits && wt.recent_commits.len() > 1 {
             lines.push(Line::from(vec![
-                Span::styled("Recent History", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-                Span::styled(" (t to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+                Span::styled(
+                    "Recent History",
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
+                ),
+                Span::styled(
+                    " (t to toggle)",
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+                ),
             ]));
-            
+
             for commit in wt.recent_commits.iter().skip(1).take(4) {
                 let msg = truncate_str(&commit.message, inner.width.saturating_sub(16) as usize);
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {} ", commit.hash), Style::default().fg(colors::PURPLE)),
+                    Span::styled(
+                        format!("  {} ", commit.hash),
+                        Style::default().fg(colors::PURPLE),
+                    ),
                     Span::styled(msg, Style::default().fg(colors::CLAUDE_WARM_GRAY)),
                 ]));
             }
@@ -2093,7 +2161,10 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
                     .bold(),
             ),
             Span::raw(" "),
-            Span::styled("(Shift+Tab to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+            Span::styled(
+                "(Shift+Tab to toggle)",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ),
         ])),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
@@ -2106,7 +2177,10 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
 
     let label_y = inner.y + 2;
     frame.render_widget(
-        Paragraph::new(Span::styled(label, Style::default().fg(colors::CLAUDE_CREAM))),
+        Paragraph::new(Span::styled(
+            label,
+            Style::default().fg(colors::CLAUDE_CREAM),
+        )),
         Rect::new(inner.x, label_y, inner.width, 1),
     );
 
