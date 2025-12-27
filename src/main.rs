@@ -1482,6 +1482,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("  ", Style::default().fg(colors::CLAUDE_ORANGE)),
         Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM).bold()),
         Span::raw(" "),
+        Span::styled(":: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
         Span::styled(
             &app.repo_name,
             Style::default().fg(colors::CLAUDE_WARM_GRAY),
@@ -1509,7 +1510,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     stats_spans.extend([
         Span::raw("  "),
         Span::styled(
-            format!(" {}", app.sort_order.label()),
+            format!("  {}", app.sort_order.label()),
             Style::default().fg(colors::CLAUDE_WARM_GRAY),
         ),
         Span::raw("  "),
