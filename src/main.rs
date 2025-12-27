@@ -1480,7 +1480,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 
     let logo = Line::from(vec![
         Span::styled("  ", Style::default().fg(colors::CLAUDE_ORANGE)),
-        Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM).bold()),
+        Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM)),
         Span::raw(" "),
         Span::styled(
             &app.repo_name,
@@ -1551,11 +1551,6 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                         colors::CLAUDE_ORANGE
                     } else {
                         colors::CLAUDE_CREAM
-                    })
-                    .add_modifier(if is_focused {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
                     }),
             ),
             Span::raw(" "),
@@ -1602,7 +1597,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 "(bare)"
             });
             let branch_style = if wt.is_main {
-                Style::default().fg(colors::CLAUDE_ORANGE).bold()
+                Style::default().fg(colors::CLAUDE_ORANGE)
             } else if wt.is_detached {
                 Style::default().fg(colors::WARNING)
             } else {
@@ -1683,11 +1678,6 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
                         colors::CLAUDE_ORANGE
                     } else {
                         colors::CLAUDE_CREAM
-                    })
-                    .add_modifier(if is_focused {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
                     }),
             ),
             Span::raw(" "),
@@ -1706,11 +1696,10 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         // --- Identity & Status ---
         let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached { "(detached)" } else { "(bare)" });
         lines.push(Line::from(vec![
-            Span::styled("● ", Style::default().fg(if wt.status.is_clean() { colors::SUCCESS } else { colors::WARNING })),
-            Span::styled(branch_name, Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(branch_name, Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::raw(" "),
             if wt.is_main {
-                Span::styled("[MAIN]", Style::default().fg(colors::PURPLE).bold())
+                Span::styled("[MAIN]", Style::default().fg(colors::PURPLE))
             } else {
                 Span::raw("")
             },
@@ -1748,7 +1737,7 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::raw(""));
 
         // --- Location ---
-        lines.push(Line::from(Span::styled("Location", Style::default().fg(colors::CLAUDE_WARM_GRAY).bold())));
+        lines.push(Line::from(Span::styled("Location", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(truncate_path(&wt.path, inner.width.saturating_sub(4) as usize), Style::default().fg(colors::CLAUDE_CREAM)),
@@ -1756,11 +1745,11 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::raw(""));
 
         // --- Current Commit ---
-        lines.push(Line::from(Span::styled("Current Commit", Style::default().fg(colors::CLAUDE_WARM_GRAY).bold())));
+        lines.push(Line::from(Span::styled("Current Commit", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
         let time_ago = wt.recent_commits.first().map(|c| c.time_ago.clone()).unwrap_or_default();
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(&wt.commit_short, Style::default().fg(colors::INFO).bold()),
+            Span::styled(&wt.commit_short, Style::default().fg(colors::INFO)),
             Span::styled(format!(" • {}", time_ago), Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
         ]));
         
@@ -1774,7 +1763,7 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
 
         // --- Attributes ---
         if wt.is_locked || wt.is_prunable {
-            lines.push(Line::from(Span::styled("Attributes", Style::default().fg(colors::CLAUDE_WARM_GRAY).bold())));
+            lines.push(Line::from(Span::styled("Attributes", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
             if wt.is_locked {
                 lines.push(Line::from(vec![
                     Span::raw("  Locked: "),
@@ -1793,7 +1782,7 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         // --- History ---
         if app.show_recent_commits && wt.recent_commits.len() > 1 {
             lines.push(Line::from(vec![
-                Span::styled("Recent History", Style::default().fg(colors::CLAUDE_WARM_GRAY).bold()),
+                Span::styled("Recent History", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
                 Span::styled(" (t to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
             ]));
             
