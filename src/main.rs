@@ -54,7 +54,7 @@ mod colors {
     // UI elements
     pub const BORDER_ACTIVE: Color = CLAUDE_ORANGE;
     pub const BORDER_INACTIVE: Color = Color::Rgb(68, 64, 60);
-    pub const SELECTION_BG: Color = Color::Rgb(68, 64, 60);
+    pub const SELECTION_BG: Color = Color::Rgb(38, 34, 30);
 }
 
 // ============================================================================
@@ -1465,9 +1465,9 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let title_block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_type(BorderType::LightDoubleDashed)
-        .border_style(Style::default().fg(colors::BORDER_INACTIVE))
+        // .borders(Borders::BOTTOM)
+        // .border_type(BorderType::LightDoubleDashed)
+        // .border_style(Style::default().fg(colors::BORDER_INACTIVE))
         .padding(Padding::horizontal(1));
 
     let inner = title_block.inner(area);
@@ -1641,9 +1641,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .header(header)
         .block(block)
         .row_highlight_style(
-            Style::default()
-                .bg(colors::SELECTION_BG)
-                .add_modifier(Modifier::BOLD),
+            Style::default().bg(colors::SELECTION_BG), // .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(" ");
 
@@ -1864,9 +1862,11 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
-        .borders(Borders::TOP)
-        .border_type(BorderType::LightDoubleDashed)
-        .border_style(Style::default().fg(colors::BORDER_INACTIVE));
+        // .borders(Borders::TOP)
+        // .border_type(BorderType::LightDoubleDashed)
+        // .border_style(Style::default().fg(colors::BORDER_INACTIVE))
+        .padding(Padding::top(1));
+    // .padding(Padding::horizontal(1));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2145,9 +2145,7 @@ fn render_branch_select_dialog(frame: &mut Frame, app: &mut App, title: &str) {
 
     let list = List::new(items)
         .highlight_style(
-            Style::default()
-                .bg(colors::SELECTION_BG)
-                .add_modifier(Modifier::BOLD),
+            Style::default().bg(colors::SELECTION_BG), // .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(" ");
 
