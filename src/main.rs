@@ -134,6 +134,7 @@ enum AppMode {
     Search,
     BranchSelect,
     MergeSelect,
+    Error,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +224,9 @@ struct App {
     // Delete dialog
     delete_confirm: bool,
 
+    // Error dialog
+    error_message: String,
+
     // Search
     search_query: String,
     search_cursor: usize,
@@ -266,6 +270,8 @@ impl App {
             merge_source_idx: None,
 
             delete_confirm: false,
+
+            error_message: String::new(),
 
             search_query: String::new(),
             search_cursor: 0,
@@ -596,6 +602,11 @@ impl App {
             level,
             timestamp: Instant::now(),
         });
+        // If it's an error, also show it in a popup
+        if level == MessageLevel::Error {
+            self.error_message = text.to_string();
+            self.mode = AppMode::Error;
+        }
     }
 
     fn clear_old_status(&mut self) {
@@ -727,16 +738,17 @@ impl App {
                 MessageLevel::Success,
             );
             self.refresh_worktrees()?;
+            // Only clear mode and input on success
+            self.mode = AppMode::Normal;
+            self.create_input.clear();
+            self.create_cursor = 0;
+            self.create_from_branch = None;
+            self.create_checkout_existing = false;
         } else {
             let error = String::from_utf8_lossy(&output.stderr);
             self.set_status(&format!("Failed: {}", error.trim()), MessageLevel::Error);
+            // Don't reset mode - keep error dialog open
         }
-
-        self.mode = AppMode::Normal;
-        self.create_input.clear();
-        self.create_cursor = 0;
-        self.create_from_branch = None;
-        self.create_checkout_existing = false;
         Ok(())
     }
 
@@ -767,14 +779,15 @@ impl App {
                     MessageLevel::Success,
                 );
                 self.refresh_worktrees()?;
+                // Only clear mode on success
+                self.mode = AppMode::Normal;
+                self.delete_confirm = false;
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);
                 self.set_status(&format!("Failed: {}", error.trim()), MessageLevel::Error);
+                // Don't reset mode - keep error dialog open
             }
         }
-
-        self.mode = AppMode::Normal;
-        self.delete_confirm = false;
         Ok(())
     }
 
@@ -1131,6 +1144,7 @@ fn handle_events(app: &mut App) -> Result<bool> {
                 AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
                 AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
                 AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
+                AppMode::Error => handle_error_mode(app, key.code)?,
             },
             Event::Mouse(mouse) => {
                 handle_mouse_event(app, mouse)?;
@@ -1286,6 +1300,17 @@ fn handle_help_mode(app: &mut App, key: KeyCode) -> Result<()> {
     match key {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Enter => {
             app.mode = AppMode::Normal;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_error_mode(app: &mut App, key: KeyCode) -> Result<()> {
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+            app.mode = AppMode::Normal;
+            app.error_message.clear();
         }
         _ => {}
     }
@@ -1478,6 +1503,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
             render_branch_select_dialog(frame, app, "Merge Into Branch");
         }
         AppMode::Search => render_search_bar(frame, app),
+        AppMode::Error => render_error_dialog(frame, app),
         _ => {}
     }
 }
@@ -2271,6 +2297,53 @@ fn render_search_bar(frame: &mut Frame, app: &App) {
     );
 
     frame.set_cursor_position((inner.x + app.search_cursor as u16, inner.y));
+}
+
+fn render_error_dialog(frame: &mut Frame, app: &App) {
+    let area = centered_rect(60, 40, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Error", Style::default().fg(colors::ERROR).bold()),
+            Span::raw(" "),
+        ]))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::ERROR))
+        .style(Style::default().bg(colors::CLAUDE_DARKER))
+        .padding(Padding::new(2, 2, 1, 1));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "An error occurred:",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(
+                &app.error_message,
+                Style::default().fg(colors::CLAUDE_CREAM),
+            )),
+        ])
+        .wrap(Wrap { trim: false }),
+        Rect::new(inner.x, inner.y, inner.width, inner.height - 3),
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" close  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" close", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        ]))
+        .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+    );
 }
 
 // ============================================================================
