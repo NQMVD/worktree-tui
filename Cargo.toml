@@ -2,6 +2,7 @@
 name = "worktree-tui"
 version = "0.1.0"
 edition = "2021"
+default-run = "worktree-tui"
 description = "A beautiful Git worktree viewer and manager with Claude-inspired design"
 authors = ["Your Name"]
 license = "MIT"
@@ -9,7 +10,7 @@ license = "MIT"
 [dependencies]
 # TUI framework
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29.0"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
