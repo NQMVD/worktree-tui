@@ -291,8 +291,9 @@ impl App {
     }
 
     fn find_git_root() -> Result<PathBuf> {
+        // Get the common git directory (shared across all worktrees)
         let output = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
+            .args(["rev-parse", "--git-common-dir"])
             .output()
             .context("Failed to execute git command")?;
 
@@ -300,12 +301,40 @@ impl App {
             anyhow::bail!("Not in a git repository");
         }
 
-        let path = String::from_utf8(output.stdout)
+        let common_dir = String::from_utf8(output.stdout)
             .context("Invalid UTF-8 in git output")?
             .trim()
             .to_string();
 
-        Ok(PathBuf::from(path))
+        // The common dir is either:
+        // - <repo>/.git (for main worktree or non-worktree repos)
+        // - <repo>/.git/worktrees/<name> (for linked worktrees)
+        let path = PathBuf::from(&common_dir);
+
+        // Check if we're in a linked worktree (path contains .git/worktrees/)
+        let components: Vec<&str> = common_dir.split("/.git/").collect();
+
+        let main_repo_path = if components.len() > 1 && components[1].starts_with("worktrees/") {
+            // We're in a linked worktree: <repo>/.git/worktrees/<name>
+            // Need to go up 4 levels: worktrees/<name> -> worktrees -> .git -> <repo>
+            let repo_path = path
+                .parent() // worktrees/<name>
+                .and_then(|p| p.parent()) // worktrees
+                .and_then(|p| p.parent()) // .git
+                .and_then(|p| p.parent()); // main repo
+            repo_path.unwrap_or(&path).to_path_buf()
+        } else if common_dir.ends_with("/.git") || common_dir.ends_with("/.git\n") {
+            // Common dir ends with .git, so parent is the main repo
+            path.parent().unwrap_or(&path).to_path_buf()
+        } else {
+            // Fallback: path itself might be the repo
+            path
+        };
+
+        // Resolve to absolute path
+        dunce::canonicalize(&main_repo_path).map_err(|e| {
+            anyhow::anyhow!("Failed to resolve git root path '{:?}': {}", main_repo_path, e)
+        })
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
@@ -676,10 +705,9 @@ impl App {
     // ===== Actions =====
 
     fn get_worktrees_dir(&self) -> PathBuf {
+        // repo_root is now guaranteed to be absolute from find_git_root()
         let parent = self.repo_root.parent().unwrap_or(&self.repo_root);
-        // Ensure the path is absolute to avoid issues when running from within a worktree
-        dunce::canonicalize(parent.join(format!("{}-worktrees", self.repo_name)))
-            .unwrap_or_else(|_| parent.join(format!("{}-worktrees", self.repo_name)))
+        parent.join(format!("{}-worktrees", self.repo_name))
     }
 
     fn create_worktree(&mut self) -> Result<()> {
