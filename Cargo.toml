@@ -12,6 +12,9 @@ license = "MIT"
 ratatui = "0.30"
 crossterm = "0.29.0"
 
+# Path handling
+dunce = "1.0"
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 

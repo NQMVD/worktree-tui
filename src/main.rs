@@ -666,7 +666,9 @@ impl App {
 
     fn get_worktrees_dir(&self) -> PathBuf {
         let parent = self.repo_root.parent().unwrap_or(&self.repo_root);
-        parent.join(format!("{}-worktrees", self.repo_name))
+        // Ensure the path is absolute to avoid issues when running from within a worktree
+        dunce::canonicalize(parent.join(format!("{}-worktrees", self.repo_name)))
+            .unwrap_or_else(|_| parent.join(format!("{}-worktrees", self.repo_name)))
     }
 
     fn create_worktree(&mut self) -> Result<()> {
