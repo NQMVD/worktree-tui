@@ -794,53 +794,57 @@ impl App {
     fn copy_path_to_clipboard(&mut self) {
         if let Some(wt) = self.selected_worktree() {
             let path = wt.path.to_string_lossy().to_string();
+            self.copy_text_to_clipboard(&path);
+            self.set_status(&format!("Copied: {}", path), MessageLevel::Success);
+        }
+    }
 
-            #[cfg(target_os = "macos")]
-            let result = Command::new("pbcopy")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(ref mut stdin) = child.stdin {
-                        stdin.write_all(path.as_bytes())?;
-                    }
-                    child.wait()
-                });
+    fn copy_text_to_clipboard(&mut self, text: &str) {
+        #[cfg(target_os = "macos")]
+        let result = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            });
 
-            #[cfg(target_os = "linux")]
-            let result = Command::new("xclip")
-                .args(["-selection", "clipboard"])
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(ref mut stdin) = child.stdin {
-                        stdin.write_all(path.as_bytes())?;
-                    }
-                    child.wait()
-                });
+        #[cfg(target_os = "linux")]
+        let result = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            });
 
-            #[cfg(target_os = "windows")]
-            let result = Command::new("clip")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(ref mut stdin) = child.stdin {
-                        stdin.write_all(path.as_bytes())?;
-                    }
-                    child.wait()
-                });
+        #[cfg(target_os = "windows")]
+        let result = Command::new("clip")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            });
 
-            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            let result: Result<std::process::ExitStatus, std::io::Error> = Err(
-                std::io::Error::new(std::io::ErrorKind::Other, "Clipboard not supported"),
-            );
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        let result: Result<std::process::ExitStatus, std::io::Error> = Err(
+            std::io::Error::new(std::io::ErrorKind::Other, "Clipboard not supported"),
+        );
 
-            match result {
-                Ok(_) => self.set_status(&format!("Copied: {}", path), MessageLevel::Success),
-                Err(_) => self.set_status("Failed to copy to clipboard", MessageLevel::Error),
-            }
+        match result {
+            Ok(_) => {}
+            Err(_) => self.set_status("Failed to copy to clipboard", MessageLevel::Error),
         }
     }
 
@@ -1311,6 +1315,10 @@ fn handle_error_mode(app: &mut App, key: KeyCode) -> Result<()> {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
             app.mode = AppMode::Normal;
             app.error_message.clear();
+        }
+        KeyCode::Char('y') => {
+            let error = app.error_message.clone();
+            app.copy_text_to_clipboard(&error);
         }
         _ => {}
     }
@@ -2336,6 +2344,8 @@ fn render_error_dialog(frame: &mut Frame, app: &App) {
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::styled("y", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" copy  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Enter", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" close  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
