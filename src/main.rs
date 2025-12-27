@@ -1480,7 +1480,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 
     let logo = Line::from(vec![
         Span::styled("  ", Style::default().fg(colors::CLAUDE_ORANGE)),
-        Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM).bold()),
+        Span::styled("Worktree", Style::default().fg(colors::CLAUDE_CREAM)),
         Span::raw(" "),
         Span::styled(":: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
         Span::styled(
@@ -1552,11 +1552,6 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                         colors::CLAUDE_ORANGE
                     } else {
                         colors::CLAUDE_CREAM
-                    })
-                    .add_modifier(if is_focused {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
                     }),
             ),
             Span::raw(" "),
@@ -1603,7 +1598,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 "(bare)"
             });
             let branch_style = if wt.is_main {
-                Style::default().fg(colors::CLAUDE_ORANGE).bold()
+                Style::default().fg(colors::CLAUDE_ORANGE)
             } else if wt.is_detached {
                 Style::default().fg(colors::WARNING)
             } else {
@@ -1684,11 +1679,6 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
                         colors::CLAUDE_ORANGE
                     } else {
                         colors::CLAUDE_CREAM
-                    })
-                    .add_modifier(if is_focused {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
                     }),
             ),
             Span::raw(" "),
@@ -1704,146 +1694,104 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(wt) = app.selected_worktree() {
         let mut lines = Vec::new();
 
+        // --- Identity & Status ---
+        let branch_name = wt.branch.as_deref().unwrap_or(if wt.is_detached { "(detached)" } else { "(bare)" });
         lines.push(Line::from(vec![
-            Span::styled("Branch    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(
-                wt.branch.as_deref().unwrap_or("(detached)"),
-                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
-            ),
-        ]));
-        lines.push(Line::raw(""));
-
-        lines.push(Line::from(vec![
-            Span::styled("Path      ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(
-                truncate_path(&wt.path, inner.width.saturating_sub(12) as usize),
-                Style::default().fg(colors::CLAUDE_CREAM),
-            ),
-        ]));
-        lines.push(Line::raw(""));
-
-        let time_ago = wt
-            .recent_commits
-            .first()
-            .map(|c| c.time_ago.clone())
-            .unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::styled("Commit    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            Span::styled(&wt.commit_short, Style::default().fg(colors::INFO)),
-            Span::styled(
-                format!("  {}", time_ago),
-                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
-            ),
-        ]));
-
-        if !wt.commit_message.is_empty() {
-            lines.push(Line::from(vec![
-                Span::raw("          "),
-                Span::styled(
-                    truncate_str(&wt.commit_message, inner.width.saturating_sub(12) as usize),
-                    Style::default().fg(colors::CLAUDE_CREAM).italic(),
-                ),
-            ]));
-        }
-        lines.push(Line::raw(""));
-
-        lines.push(Line::from(vec![
-            Span::styled("Status    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-            if wt.status.is_clean() {
-                Span::styled(" Clean", Style::default().fg(colors::SUCCESS))
+            Span::styled(branch_name, Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::raw(" "),
+            if wt.is_main {
+                Span::styled("[MAIN]", Style::default().fg(colors::PURPLE))
             } else {
-                Span::styled(" Modified", Style::default().fg(colors::WARNING))
+                Span::raw("")
             },
         ]));
 
-        if !wt.status.is_clean() || wt.status.ahead > 0 || wt.status.behind > 0 {
-            let mut status_spans = vec![Span::raw("          ")];
-            if wt.status.staged > 0 {
-                status_spans.push(Span::styled(
-                    format!(" +{} ", wt.status.staged),
-                    Style::default().fg(colors::SUCCESS),
-                ));
+        let mut status_spans = vec![Span::raw("  ")];
+        if wt.status.is_clean() {
+            status_spans.push(Span::styled("Clean", Style::default().fg(colors::SUCCESS)));
+        } else {
+            status_spans.push(Span::styled("Modified", Style::default().fg(colors::WARNING)));
+            status_spans.push(Span::raw(" ("));
+            let mut parts = Vec::new();
+            if wt.status.staged > 0 { parts.push(Span::styled(format!("+{}", wt.status.staged), Style::default().fg(colors::SUCCESS))); }
+            if wt.status.modified > 0 { parts.push(Span::styled(format!("~{}", wt.status.modified), Style::default().fg(colors::WARNING))); }
+            if wt.status.untracked > 0 { parts.push(Span::styled(format!("?{}", wt.status.untracked), Style::default().fg(colors::CLAUDE_WARM_GRAY))); }
+            
+            for (i, part) in parts.into_iter().enumerate() {
+                if i > 0 { status_spans.push(Span::raw(" ")); }
+                status_spans.push(part);
             }
-            if wt.status.modified > 0 {
-                status_spans.push(Span::styled(
-                    format!(" ~{} ", wt.status.modified),
-                    Style::default().fg(colors::WARNING),
-                ));
-            }
-            if wt.status.untracked > 0 {
-                status_spans.push(Span::styled(
-                    format!(" ?{} ", wt.status.untracked),
-                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
-                ));
-            }
+            status_spans.push(Span::raw(")"));
+        }
+        
+        if wt.status.ahead > 0 || wt.status.behind > 0 {
+            status_spans.push(Span::styled(" • ", Style::default().fg(colors::CLAUDE_WARM_GRAY)));
             if wt.status.ahead > 0 {
-                status_spans.push(Span::styled(
-                    format!(" {} ", wt.status.ahead),
-                    Style::default().fg(colors::SUCCESS),
-                ));
+                status_spans.push(Span::styled(format!("↑{}", wt.status.ahead), Style::default().fg(colors::SUCCESS)));
+                if wt.status.behind > 0 { status_spans.push(Span::raw(" ")); }
             }
             if wt.status.behind > 0 {
-                status_spans.push(Span::styled(
-                    format!(" {} ", wt.status.behind),
-                    Style::default().fg(colors::ERROR),
-                ));
+                status_spans.push(Span::styled(format!("↓{}", wt.status.behind), Style::default().fg(colors::ERROR)));
             }
-            lines.push(Line::from(status_spans));
+        }
+        lines.push(Line::from(status_spans));
+        lines.push(Line::raw(""));
+
+        // --- Location ---
+        lines.push(Line::from(Span::styled("Location", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(truncate_path(&wt.path, inner.width.saturating_sub(4) as usize), Style::default().fg(colors::CLAUDE_CREAM)),
+        ]));
+        lines.push(Line::raw(""));
+
+        // --- Current Commit ---
+        lines.push(Line::from(Span::styled("Current Commit", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
+        let time_ago = wt.recent_commits.first().map(|c| c.time_ago.clone()).unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(&wt.commit_short, Style::default().fg(colors::INFO)),
+            Span::styled(format!(" • {}", time_ago), Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+        ]));
+        
+        if !wt.commit_message.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(&wt.commit_message, Style::default().fg(colors::CLAUDE_CREAM).italic()),
+            ]));
         }
         lines.push(Line::raw(""));
 
-        if wt.is_main || wt.is_locked || wt.is_prunable {
-            let mut flag_spans = vec![Span::styled(
-                "Flags     ",
-                Style::default().fg(colors::CLAUDE_WARM_GRAY),
-            )];
-            if wt.is_main {
-                flag_spans.push(Span::styled(
-                    " main ",
-                    Style::default().fg(colors::CLAUDE_ORANGE),
-                ));
-            }
+        // --- Attributes ---
+        if wt.is_locked || wt.is_prunable {
+            lines.push(Line::from(Span::styled("Attributes", Style::default().fg(colors::CLAUDE_WARM_GRAY))));
             if wt.is_locked {
-                flag_spans.push(Span::styled(
-                    "  locked ",
-                    Style::default().fg(colors::WARNING),
-                ));
+                lines.push(Line::from(vec![
+                    Span::raw("  Locked: "),
+                    Span::styled(wt.lock_reason.as_deref().unwrap_or("no reason provided"), Style::default().fg(colors::WARNING).italic()),
+                ]));
             }
             if wt.is_prunable {
-                flag_spans.push(Span::styled(
-                    " prunable ",
-                    Style::default().fg(colors::ERROR),
-                ));
+                lines.push(Line::from(vec![
+                    Span::raw("  Prunable: "),
+                    Span::styled("Worktree path is missing or invalid", Style::default().fg(colors::ERROR).italic()),
+                ]));
             }
-            lines.push(Line::from(flag_spans));
             lines.push(Line::raw(""));
         }
 
-        if app.show_recent_commits && !wt.recent_commits.is_empty() {
+        // --- History ---
+        if app.show_recent_commits && wt.recent_commits.len() > 1 {
             lines.push(Line::from(vec![
-                Span::styled("Recent    ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-                Span::styled(
-                    "commits (t to toggle)",
-                    Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
-                ),
+                Span::styled("Recent History", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+                Span::styled(" (t to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
             ]));
-            lines.push(Line::raw(""));
-
-            for commit in wt.recent_commits.iter().take(4) {
+            
+            for commit in wt.recent_commits.iter().skip(1).take(4) {
+                let msg = truncate_str(&commit.message, inner.width.saturating_sub(16) as usize);
                 lines.push(Line::from(vec![
-                    Span::styled(&commit.hash, Style::default().fg(colors::PURPLE)),
-                    Span::raw(" "),
-                    Span::styled(
-                        truncate_str(&commit.message, inner.width.saturating_sub(18) as usize),
-                        Style::default().fg(colors::CLAUDE_CREAM),
-                    ),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::raw("        "),
-                    Span::styled(
-                        &commit.time_ago,
-                        Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
-                    ),
+                    Span::styled(format!("  {} ", commit.hash), Style::default().fg(colors::PURPLE)),
+                    Span::styled(msg, Style::default().fg(colors::CLAUDE_WARM_GRAY)),
                 ]));
             }
         }
@@ -2309,10 +2257,21 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 
 fn truncate_path(path: &PathBuf, max_len: usize) -> String {
     let s = path.to_string_lossy();
-    if s.len() <= max_len {
+    let width = s.width();
+    if width <= max_len {
         s.to_string()
     } else {
-        format!("...{}", &s[s.len().saturating_sub(max_len - 3)..])
+        let mut result = String::new();
+        let mut current_width = 3; // for "..."
+        for c in s.chars().rev() {
+            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if current_width + char_width > max_len {
+                break;
+            }
+            result.push(c);
+            current_width += char_width;
+        }
+        format!("...{}", result.chars().rev().collect::<String>())
     }
 }
 
