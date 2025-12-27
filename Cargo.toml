@@ -24,6 +24,14 @@ chrono = "0.4"
 # Unicode width for proper text display
 unicode-width = "0.2"
 
+[[bin]]
+name = "worktree-tui"
+path = "src/main.rs"
+
+[[bin]]
+name = "wtt"
+path = "src/main.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1
