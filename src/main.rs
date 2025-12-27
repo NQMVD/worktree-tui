@@ -217,6 +217,7 @@ struct App {
     available_branches: Vec<Branch>,
     branch_list_state: ListState,
     create_from_branch: Option<String>,
+    create_checkout_existing: bool,
     merge_source_idx: Option<usize>,
 
     // Delete dialog
@@ -261,6 +262,7 @@ impl App {
             available_branches: Vec::new(),
             branch_list_state: ListState::default(),
             create_from_branch: None,
+            create_checkout_existing: false,
             merge_source_idx: None,
 
             delete_confirm: false,
@@ -674,6 +676,12 @@ impl App {
             return Ok(());
         }
 
+        // When checking out existing branch, a branch must be selected
+        if self.create_checkout_existing && self.create_from_branch.is_none() {
+            self.set_status("Select a branch to checkout (Tab)", MessageLevel::Error);
+            return Ok(());
+        }
+
         // Create worktrees in PROJECT-worktrees/ directory
         let worktrees_dir = self.get_worktrees_dir();
 
@@ -692,15 +700,18 @@ impl App {
 
         let mut args = vec!["worktree", "add"];
 
-        if let Some(ref branch) = self.create_from_branch {
-            args.push("-b");
-            args.push(name);
+        if self.create_checkout_existing {
+            // Checkout existing branch: git worktree add <path> <existing-branch>
             args.push(worktree_path.to_str().unwrap());
-            args.push(branch);
+            args.push(self.create_from_branch.as_ref().unwrap());
         } else {
+            // Create new branch: git worktree add -b <new-branch-name> <path> [<base-branch>]
             args.push("-b");
             args.push(name);
             args.push(worktree_path.to_str().unwrap());
+            if let Some(ref branch) = self.create_from_branch {
+                args.push(branch);
+            }
         }
 
         let output = Command::new("git")
@@ -723,6 +734,7 @@ impl App {
         self.create_input.clear();
         self.create_cursor = 0;
         self.create_from_branch = None;
+        self.create_checkout_existing = false;
         Ok(())
     }
 
@@ -1196,6 +1208,7 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             app.create_input.clear();
             app.create_cursor = 0;
             app.create_from_branch = None;
+            app.create_checkout_existing = false;
             let _ = app.refresh_branches();
         }
         KeyCode::Char('x') | KeyCode::Delete => {
@@ -1282,8 +1295,12 @@ fn handle_create_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Esc => {
             app.mode = AppMode::Normal;
             app.create_input.clear();
+            app.create_checkout_existing = false;
         }
         KeyCode::Enter => app.create_worktree()?,
+        KeyCode::Char('b') => {
+            app.create_checkout_existing = !app.create_checkout_existing;
+        }
         KeyCode::Tab => {
             app.mode = AppMode::BranchSelect;
             app.branch_list_state.select(Some(0));
@@ -1909,6 +1926,7 @@ fn render_help_dialog(frame: &mut Frame) {
             "Git Operations",
             vec![
                 "c / a            Create worktree",
+                "  b              Toggle new/existing branch",
                 "x / Del          Delete worktree",
                 "L                Toggle lock",
                 "p                Pull (in worktree)",
@@ -1968,7 +1986,7 @@ fn render_help_dialog(frame: &mut Frame) {
 }
 
 fn render_create_dialog(frame: &mut Frame, app: &App) {
-    let area = centered_rect(50, 35, frame.area());
+    let area = centered_rect(50, 40, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -1989,15 +2007,43 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Mode toggle indicator
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "Worktree name:",
-            Style::default().fg(colors::CLAUDE_CREAM),
-        )),
+        Paragraph::new(Line::from(vec![
+            Span::styled("Mode: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled(
+                if app.create_checkout_existing {
+                    "[Checkout Existing]"
+                } else {
+                    "[Create New Branch]"
+                },
+                Style::default()
+                    .fg(if app.create_checkout_existing {
+                        colors::INFO
+                    } else {
+                        colors::SUCCESS
+                    })
+                    .bold(),
+            ),
+            Span::raw(" "),
+            Span::styled("(b to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+        ])),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
 
-    let input_area = Rect::new(inner.x, inner.y + 2, inner.width, 3);
+    let label = if app.create_checkout_existing {
+        "Worktree directory:"
+    } else {
+        "Worktree name:"
+    };
+
+    let label_y = inner.y + 2;
+    frame.render_widget(
+        Paragraph::new(Span::styled(label, Style::default().fg(colors::CLAUDE_CREAM))),
+        Rect::new(inner.x, label_y, inner.width, 1),
+    );
+
+    let input_area = Rect::new(inner.x, label_y + 2, inner.width, 3);
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -2021,21 +2067,34 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
         ));
     }
 
+    let branch_label = if app.create_checkout_existing {
+        "Branch to checkout:"
+    } else {
+        "Base branch:"
+    };
+
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Base branch: ", Style::default().fg(colors::CLAUDE_CREAM)),
+            Span::styled(branch_label, Style::default().fg(colors::CLAUDE_CREAM)),
+            Span::raw(" "),
             Span::styled(
                 app.create_from_branch
                     .as_deref()
-                    .unwrap_or("HEAD (current)"),
+                    .unwrap_or(if app.create_checkout_existing {
+                        "(select branch)"
+                    } else {
+                        "HEAD (current)"
+                    }),
                 Style::default().fg(colors::CLAUDE_ORANGE),
             ),
         ])),
-        Rect::new(inner.x, inner.y + 6, inner.width, 1),
+        Rect::new(inner.x, label_y + 6, inner.width, 1),
     );
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::styled("b", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" mode  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Tab", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" branch  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Enter", Style::default().fg(colors::CLAUDE_ORANGE)),
