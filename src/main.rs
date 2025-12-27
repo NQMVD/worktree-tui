@@ -1319,6 +1319,9 @@ fn handle_error_mode(app: &mut App, key: KeyCode) -> Result<()> {
         KeyCode::Char('y') => {
             let error = app.error_message.clone();
             app.copy_text_to_clipboard(&error);
+            app.mode = AppMode::Normal;
+            app.error_message.clear();
+            app.set_status("Error copied to clipboard", MessageLevel::Success);
         }
         _ => {}
     }
