@@ -1298,7 +1298,7 @@ fn handle_create_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             app.create_checkout_existing = false;
         }
         KeyCode::Enter => app.create_worktree()?,
-        KeyCode::Char('b') => {
+        KeyCode::BackTab => {
             app.create_checkout_existing = !app.create_checkout_existing;
         }
         KeyCode::Tab => {
@@ -1926,7 +1926,7 @@ fn render_help_dialog(frame: &mut Frame) {
             "Git Operations",
             vec![
                 "c / a            Create worktree",
-                "  b              Toggle new/existing branch",
+                "Shift+Tab        Toggle new/existing branch",
                 "x / Del          Delete worktree",
                 "L                Toggle lock",
                 "p                Pull (in worktree)",
@@ -2026,7 +2026,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
                     .bold(),
             ),
             Span::raw(" "),
-            Span::styled("(b to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+            Span::styled("(Shift+Tab to toggle)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
         ])),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
@@ -2093,7 +2093,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("b", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled("Shift+Tab", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" mode  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled("Tab", Style::default().fg(colors::CLAUDE_ORANGE)),
             Span::styled(" branch  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
