@@ -22,13 +22,26 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
+
+// Timing log helper - writes to /tmp/wtt-timing.log
+macro_rules! timing_log {
+    ($($arg:tt)*) => {{
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/wtt-timing.log")
+        {
+            let _ = writeln!(file, $($arg)*);
+        }
+    }};
+}
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -238,7 +251,12 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
+        let total_start = Instant::now();
+        
+        let start = Instant::now();
         let repo_root = Self::find_git_root()?;
+        timing_log!("[TIMING] find_git_root: {:?}", start.elapsed());
+        
         let repo_name = repo_root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -291,6 +309,7 @@ impl App {
             app.table_state.select(Some(0));
         }
 
+        timing_log!("[TIMING] App::new() total: {:?}", total_start.elapsed());
         Ok(app)
     }
 
@@ -335,11 +354,15 @@ impl App {
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
+        let total_start = Instant::now();
+        
+        let start = Instant::now();
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["worktree", "list", "--porcelain"])
             .output()
             .context("Failed to list worktrees")?;
+        timing_log!("[TIMING] git worktree list: {:?}", start.elapsed());
 
         if !output.status.success() {
             anyhow::bail!("git worktree list failed");
@@ -350,15 +373,28 @@ impl App {
         self.last_refresh = Instant::now();
 
         // Fetch additional status for each worktree
-        for worktree in &mut self.worktrees {
+        let start = Instant::now();
+        for (i, worktree) in self.worktrees.iter_mut().enumerate() {
             if !worktree.is_bare {
+                let wt_start = Instant::now();
                 worktree.status = Self::get_worktree_status(&worktree.path);
+                let status_time = wt_start.elapsed();
+                
+                let commit_start = Instant::now();
                 let commit_info = Self::get_commit_info(&worktree.path);
                 worktree.commit_message = commit_info.0;
                 worktree.commit_time = commit_info.1;
+                let commit_time = commit_start.elapsed();
+                
+                let recent_start = Instant::now();
                 worktree.recent_commits = Self::get_recent_commits(&worktree.path, 10);
+                let recent_time = recent_start.elapsed();
+                
+                timing_log!("[TIMING] worktree {}: status={:?}, commit={:?}, recent={:?}", 
+                    i, status_time, commit_time, recent_time);
             }
         }
+        timing_log!("[TIMING] all worktree info: {:?}", start.elapsed());
 
         // Apply sorting
         self.apply_sort();
@@ -370,6 +406,7 @@ impl App {
             self.filtered_indices = (0..self.worktrees.len()).collect();
         }
 
+        timing_log!("[TIMING] refresh_worktrees total: {:?}", total_start.elapsed());
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
     }
