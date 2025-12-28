@@ -4,16 +4,16 @@
 mod cache;
 
 use anyhow::{Context, Result};
-use gix::bstr::ByteSlice;
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
-        MouseEventKind, EventStream,
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::StreamExt;
+use gix::bstr::ByteSlice;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -33,9 +33,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use unicode_width::UnicodeWidthStr;
 use tracing::{info, info_span};
-use tracing_subscriber::{fmt::{self}, prelude::*, EnvFilter};
+use tracing_subscriber::{
+    fmt::{self},
+    prelude::*,
+    EnvFilter,
+};
+use unicode_width::UnicodeWidthStr;
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -267,26 +271,31 @@ impl App {
     fn new() -> Result<Self> {
         let _span = info_span!("App::new").entered();
         let repo = Self::find_git_repository()?;
-        
+
         // Ensure we have absolute paths from the start
         let common_dir = dunce::canonicalize(repo.common_dir())
             .unwrap_or_else(|_| repo.common_dir().to_path_buf());
-        
+
         let repo_root = if repo.is_bare() {
             common_dir.clone()
         } else {
             // For a non-bare repo, the main worktree is the parent of the .git directory (common_dir)
-            common_dir.parent()
+            common_dir
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| common_dir.clone())
         };
-        
+
         let repo_name = repo_root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "repository".to_string());
 
-        info!(?repo_root, ?repo_name, "Repository root correctly determined as absolute path");
+        info!(
+            ?repo_root,
+            ?repo_name,
+            "Repository root correctly determined as absolute path"
+        );
 
         // Get the current worktree path (where the program was run from)
         // Ensure it's canonicalized for reliable comparison later
@@ -298,14 +307,20 @@ impl App {
         info!(?current_worktree_path, "Current worktree path determined");
 
         // Try to load from cache for instant startup
-        let (worktrees, loading_state): (Vec<Worktree>, LoadingState) = if let Some(cached) = cache::load_cache(&repo_root) {
+        let (worktrees, loading_state): (Vec<Worktree>, LoadingState) = if let Some(cached) =
+            cache::load_cache(&repo_root)
+        {
             let is_fresh = cached.is_fresh();
-            let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
+            let worktrees =
+                Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
             if is_fresh {
                 info!(count = worktrees.len(), "Cache hit (fresh)");
                 (worktrees, LoadingState::Idle)
             } else {
-                info!(count = worktrees.len(), "Cache hit (stale), triggering background refresh");
+                info!(
+                    count = worktrees.len(),
+                    "Cache hit (stale), triggering background refresh"
+                );
                 (worktrees, LoadingState::Loading)
             }
         } else {
@@ -460,7 +475,7 @@ impl App {
     fn refresh_worktrees(&mut self) -> Result<()> {
         let _span = info_span!("refresh_worktrees").entered();
         info!("Synchronous worktree refresh started");
-        
+
         let worktree_proxies = self.repo.worktrees().context("Failed to list worktrees")?;
         let mut worktrees = Vec::new();
 
@@ -501,7 +516,7 @@ impl App {
 
         // Save to cache
         self.save_to_cache();
-        
+
         self.loading_state = LoadingState::Idle;
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
@@ -514,14 +529,20 @@ impl App {
                 let is_locked = p.lock_reason().is_some();
                 let lock_reason = p.lock_reason().map(|s| s.to_string());
                 // To get branch and commit, we need to open the repo at that path or use the proxy
-                let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
+                let wt_repo = p
+                    .into_repo()
+                    .context("Failed to open worktree repo from proxy")?;
                 let head = wt_repo.head().context("Failed to get HEAD")?;
                 let branch = head.referent_name().map(|n| n.shorten().to_string());
                 let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
                 (path, branch, commit, false, is_locked, lock_reason)
             }
             None => {
-                let path = self.repo.work_dir().map(|p| p.to_path_buf()).unwrap_or_else(|| self.repo.common_dir().to_path_buf());
+                let path = self
+                    .repo
+                    .work_dir()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.repo.common_dir().to_path_buf());
                 let head = self.repo.head().context("Failed to get HEAD")?;
                 let branch = head.referent_name().map(|n| n.shorten().to_string());
                 let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
@@ -599,12 +620,16 @@ impl App {
 
         // Use high-level status API
         if let Ok(stat) = repo.status(gix::progress::Discard) {
-            if let Ok(res) = stat.index_worktree_rewrites(None)
-                .into_index_worktree_iter(Vec::<gix::bstr::BString>::new()) {
+            if let Ok(res) = stat
+                .index_worktree_rewrites(None)
+                .into_index_worktree_iter(Vec::<gix::bstr::BString>::new())
+            {
                 for item in res {
                     if let Ok(item) = item {
                         match item {
-                            gix::status::index_worktree::Item::Modification { .. } => status.modified += 1,
+                            gix::status::index_worktree::Item::Modification { .. } => {
+                                status.modified += 1
+                            }
                             _ => {}
                         }
                     }
@@ -637,12 +662,14 @@ impl App {
         if let Some(id) = head.id() {
             let walk = repo.rev_walk([id.detach()]).all()?;
             for (i, commit_info) in walk.enumerate() {
-                if i >= count { break; }
+                if i >= count {
+                    break;
+                }
                 let commit_info = commit_info?;
                 let commit = repo.find_object(commit_info.id)?.into_commit();
                 let message = commit.message()?.summary().to_string();
                 let hash = commit.id().to_string().chars().take(7).collect::<String>();
-                
+
                 let time = commit.time()?;
                 let now = gix::date::Time::now_local_or_utc();
                 let diff_secs = now.seconds.saturating_sub(time.seconds);
@@ -670,7 +697,12 @@ impl App {
         let mut branches = Vec::new();
 
         let refs = self.repo.references()?;
-        let head_name = self.repo.head()?.referent_name().map(|n| n.as_bstr().to_string()).unwrap_or_default();
+        let head_name = self
+            .repo
+            .head()?
+            .referent_name()
+            .map(|n| n.as_bstr().to_string())
+            .unwrap_or_default();
 
         if let Ok(local_branches) = refs.local_branches() {
             for head in local_branches {
@@ -1182,7 +1214,13 @@ impl App {
         // Try to detect the main branch name from origin/HEAD
         if let Ok(remote_head) = self.repo.find_reference("refs/remotes/origin/HEAD") {
             if let Some(Ok(target)) = remote_head.follow() {
-                if let Some(name) = target.name().shorten().to_str().ok().and_then(|s| s.strip_prefix("origin/")) {
+                if let Some(name) = target
+                    .name()
+                    .shorten()
+                    .to_str()
+                    .ok()
+                    .and_then(|s| s.strip_prefix("origin/"))
+                {
                     return name.to_string();
                 }
             }
@@ -1261,7 +1299,6 @@ impl App {
 // ============================================================================
 // Event Handling
 // ============================================================================
-
 
 fn handle_mouse_event(app: &mut App, mouse: crossterm::event::MouseEvent) -> Result<()> {
     if app.mode != AppMode::Normal {
@@ -1766,7 +1803,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let icon = if wt.is_current {
                 // Highlight the worktree we're currently in
-                Span::styled("*", Style::default().fg(colors::CLAUDE_CREAM)) // other ones: ○ 
+                Span::styled("*", Style::default().fg(colors::CLAUDE_CREAM)) // other ones: ○
             } else if wt.is_main {
                 Span::styled("", Style::default().fg(colors::CLAUDE_ORANGE))
             } else if wt.is_locked {
@@ -2118,7 +2155,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     // Build right side content: spinner (if loading) + status message
     let mut right_spans: Vec<Span> = Vec::new();
-    
+
     // Add spinner if loading
     if app.loading_state == LoadingState::Loading {
         let spinner_char = SPINNER_FRAMES[app.spinner_frame];
@@ -2137,7 +2174,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         };
         right_spans.push(Span::styled(&msg.text, Style::default().fg(color)));
     }
-    
+
     if !right_spans.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
@@ -2671,17 +2708,19 @@ async fn main() -> Result<()> {
         .append(true)
         .open("/tmp/wtt.log")
         .expect("Failed to open log file");
-        
+
     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
-    
+
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with(fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .compact()
-            .with_timer(JustTime)
-            .with_span_events(fmt::format::FmtSpan::CLOSE))
+        .with(
+            fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .compact()
+                .with_timer(JustTime)
+                .with_span_events(fmt::format::FmtSpan::CLOSE),
+        )
         .init();
 
     info!("Starting worktree-tui");
@@ -2740,25 +2779,32 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<Option<PathBuf>> {
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+) -> Result<Option<PathBuf>> {
     // Create channel for background refresh updates
     let (tx, mut rx) = mpsc::unbounded_channel::<AppUpdate>();
-    
+
     // If we need to load/refresh, spawn background task
     if app.loading_state == LoadingState::Loading {
-        spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+        spawn_refresh_task(
+            tx.clone(),
+            app.repo_root.clone(),
+            app.current_worktree_path.clone(),
+        );
     }
-    
+
     // Create async event stream
     let mut event_stream = EventStream::new();
-    
+
     // Spinner tick interval (100ms for smooth animation)
     let mut spinner_interval = tokio::time::interval(Duration::from_millis(100));
-    
+
     loop {
         // Render
         terminal.draw(|f| ui(f, app))?;
-        
+
         // Async event handling with tokio::select!
         tokio::select! {
             // Handle keyboard/mouse events
@@ -2769,7 +2815,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                     }
                 }
             }
-            
+
             // Handle background refresh updates
             Some(update) = rx.recv() => {
                 match update {
@@ -2780,7 +2826,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                         app.filtered_indices = (0..app.worktrees.len()).collect();
                         app.loading_state = LoadingState::Idle;
                         app.save_to_cache();
-                        
+
                         // Restore selection
                         if let Some(idx) = selected {
                             if idx < app.filtered_indices.len() {
@@ -2791,12 +2837,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                         } else if !app.filtered_indices.is_empty() {
                             app.table_state.select(Some(0));
                         }
-                        
-                        app.set_status("Refreshed from background", MessageLevel::Success);
+
+                        // app.set_status("Refreshed from background", MessageLevel::Success);
                     }
                 }
             }
-            
+
             // Spinner animation tick
             _ = spinner_interval.tick() => {
                 if app.loading_state == LoadingState::Loading {
@@ -2809,13 +2855,17 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 }
 
 /// Spawn a background task to refresh worktree data
-fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, current_path: PathBuf) {
+fn spawn_refresh_task(
+    tx: mpsc::UnboundedSender<AppUpdate>,
+    repo_root: PathBuf,
+    current_path: PathBuf,
+) {
     tokio::spawn(async move {
         // Run blocking git commands in a blocking task
-        let result = tokio::task::spawn_blocking(move || {
-            fetch_all_worktrees(&repo_root, &current_path)
-        }).await;
-        
+        let result =
+            tokio::task::spawn_blocking(move || fetch_all_worktrees(&repo_root, &current_path))
+                .await;
+
         match result {
             Ok(Ok(worktrees)) => {
                 info!(count = worktrees.len(), "Background refresh successful");
@@ -2833,10 +2883,12 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
 
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
 
-
-
 /// Handle a single event, return true if should quit
-fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdate>) -> Result<bool> {
+fn handle_event(
+    app: &mut App,
+    event: Event,
+    tx: &mpsc::UnboundedSender<AppUpdate>,
+) -> Result<bool> {
     match event {
         Event::Key(key) => match app.mode {
             AppMode::Normal => handle_normal_mode_async(app, key.code, key.modifiers, tx)?,
@@ -2858,22 +2910,26 @@ fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdat
 
 /// Handle normal mode with async refresh capability
 fn handle_normal_mode_async(
-    app: &mut App, 
-    key: KeyCode, 
+    app: &mut App,
+    key: KeyCode,
     modifiers: KeyModifiers,
-    tx: &mpsc::UnboundedSender<AppUpdate>
+    tx: &mpsc::UnboundedSender<AppUpdate>,
 ) -> Result<()> {
     match key {
         // Refresh triggers background task instead of blocking
         KeyCode::Char('r') | KeyCode::Char('R') => {
             if app.loading_state != LoadingState::Loading {
                 app.loading_state = LoadingState::Loading;
-                spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+                spawn_refresh_task(
+                    tx.clone(),
+                    app.repo_root.clone(),
+                    app.current_worktree_path.clone(),
+                );
                 app.set_status("Refreshing...", MessageLevel::Info);
             }
         }
         // All other keys handled by existing function
-        _ => handle_normal_mode(app, key, modifiers)?
+        _ => handle_normal_mode(app, key, modifiers)?,
     }
     Ok(())
 }
@@ -2881,7 +2937,7 @@ fn handle_normal_mode_async(
 fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<Vec<Worktree>> {
     let _span = info_span!("fetch_all_worktrees").entered();
     info!(repo_root = %repo_root.display(), "Starting fetch_all_worktrees");
-    
+
     let repo = match gix::open(repo_root) {
         Ok(r) => {
             info!(path = ?r.path(), "Successfully opened repository at repo_root");
@@ -2907,60 +2963,65 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
     let mut worktrees = Vec::new();
 
     // Helper to create Worktree struct
-    let get_wt_info = |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
-        let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
-            Some(p) => {
-                let path = p.base()?.to_path_buf();
-                let is_locked = p.lock_reason().is_some();
-                let lock_reason = p.lock_reason().map(|s| s.to_string());
-                
-                let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
-                let head = wt_repo.head().context("Failed to get HEAD for worktree")?;
-                let branch = head.referent_name().map(|n| n.shorten().to_string());
-                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                (path, branch, commit, false, is_locked, lock_reason)
+    let get_wt_info =
+        |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
+            let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
+                Some(p) => {
+                    let path = p.base()?.to_path_buf();
+                    let is_locked = p.lock_reason().is_some();
+                    let lock_reason = p.lock_reason().map(|s| s.to_string());
+
+                    let wt_repo = p
+                        .into_repo()
+                        .context("Failed to open worktree repo from proxy")?;
+                    let head = wt_repo.head().context("Failed to get HEAD for worktree")?;
+                    let branch = head.referent_name().map(|n| n.shorten().to_string());
+                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                    (path, branch, commit, false, is_locked, lock_reason)
+                }
+                None => {
+                    let path = r
+                        .work_dir()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| r.common_dir().to_path_buf());
+
+                    let head = r.head().context("Failed to get HEAD for main repo")?;
+                    let branch = head.referent_name().map(|n| n.shorten().to_string());
+                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                    (path, branch, commit, true, false, None)
+                }
+            };
+
+            // Canonicalize both for bulletproof comparison
+            let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let canon_current =
+                dunce::canonicalize(_current_path).unwrap_or_else(|_| _current_path.clone());
+
+            // Match if it's the exact path or if the current dir is inside this worktree
+            let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
+
+            if is_current {
+                info!(?path, ?_current_path, "Current worktree detected");
             }
-            None => {
-                let path = r.work_dir()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| r.common_dir().to_path_buf());
-                
-                let head = r.head().context("Failed to get HEAD for main repo")?;
-                let branch = head.referent_name().map(|n| n.shorten().to_string());
-                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                (path, branch, commit, true, false, None)
-            }
+
+            Ok(Worktree {
+                path: canon_path,
+                branch,
+                commit_short: commit.chars().take(7).collect::<String>(),
+                commit,
+                commit_message: String::new(),
+                commit_time: None,
+                is_main,
+                is_current,
+                is_bare: r.is_bare() && is_main,
+                is_detached: false,
+                is_locked,
+                lock_reason,
+                is_prunable: !path.exists(),
+                status: WorktreeStatus::default(),
+                recent_commits: Vec::new(),
+            })
         };
-
-        // Canonicalize both for bulletproof comparison
-        let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let canon_current = dunce::canonicalize(_current_path).unwrap_or_else(|_| _current_path.clone());
-        
-        // Match if it's the exact path or if the current dir is inside this worktree
-        let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
-        
-        if is_current {
-            info!(?path, ?_current_path, "Current worktree detected");
-        }
-
-        Ok(Worktree {
-            path: canon_path,
-            branch,
-            commit_short: commit.chars().take(7).collect::<String>(),
-            commit,
-            commit_message: String::new(),
-            commit_time: None,
-            is_main,
-            is_current,
-            is_bare: r.is_bare() && is_main,
-            is_detached: false,
-            is_locked,
-            lock_reason,
-            is_prunable: !path.exists(),
-            status: WorktreeStatus::default(),
-            recent_commits: Vec::new(),
-        })
-    };
 
     // Add main worktree
     match get_wt_info(None, &repo) {
@@ -2991,21 +3052,25 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
         }
     }
 
-    info!(count = worktrees.len(), "Worktree base list completed, starting detail fetch in parallel");
+    info!(
+        count = worktrees.len(),
+        "Worktree base list completed, starting detail fetch in parallel"
+    );
 
     // Fetch additional status for each worktree IN PARALLEL
     std::thread::scope(|s| {
         let mut task_handles = Vec::new();
-        
+
         for (i, wt) in worktrees.iter().enumerate() {
-            if wt.is_bare || wt.is_prunable { 
+            if wt.is_bare || wt.is_prunable {
                 info!(idx = i, path = %wt.path.display(), is_bare = wt.is_bare, is_prunable = wt.is_prunable, "Skipping details fetch");
-                continue; 
+                continue;
             }
             let path = wt.path.clone();
-            
+
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("fetch_wt_details", wt_idx = i, path = %path.display()).entered();
+                let _span =
+                    info_span!("fetch_wt_details", wt_idx = i, path = %path.display()).entered();
                 match gix::open(&path) {
                     Ok(repo) => {
                         let status = App::get_gix_status(&repo).unwrap_or_else(|e| {
@@ -3016,20 +3081,26 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
                             info!(error = ?e, "Commit info fetch failed for worktree");
                             (String::new(), None)
                         });
-                        let recent_commits = App::get_gix_recent_commits(&repo, 10).unwrap_or_else(|e| {
-                            info!(error = ?e, "Recent commits fetch failed for worktree");
-                            Vec::new()
-                        });
+                        let recent_commits =
+                            App::get_gix_recent_commits(&repo, 10).unwrap_or_else(|e| {
+                                info!(error = ?e, "Recent commits fetch failed for worktree");
+                                Vec::new()
+                            });
                         (i, status, commit_info, recent_commits)
                     }
                     Err(e) => {
                         info!(error = ?e, "Failed to open repo at worktree path for details");
-                        (i, WorktreeStatus::default(), (String::new(), None), Vec::new())
+                        (
+                            i,
+                            WorktreeStatus::default(),
+                            (String::new(), None),
+                            Vec::new(),
+                        )
                     }
                 }
             }));
         }
-        
+
         for handle in task_handles {
             if let Ok((idx, status, commit_info, recent_commits)) = handle.join() {
                 worktrees[idx].status = status;
@@ -3039,7 +3110,7 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
             }
         }
     });
-    
+
     info!(count = worktrees.len(), "Finished all worktree fetching");
     Ok(worktrees)
 }
