@@ -100,7 +100,7 @@ fn cache_file_path(repo_root: &PathBuf) -> Option<PathBuf> {
 /// Load cache from disk for a specific repo
 pub fn load_cache(repo_root: &PathBuf) -> Option<WorktreeCache> {
     let path = cache_file_path(repo_root)?;
-    
+
     if !path.exists() {
         return None;
     }
@@ -119,14 +119,20 @@ pub fn load_cache(repo_root: &PathBuf) -> Option<WorktreeCache> {
 /// Save cache to disk
 pub fn save_cache(cache: &WorktreeCache) -> Result<(), std::io::Error> {
     let dir = cache_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Could not determine cache directory")
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not determine cache directory",
+        )
     })?;
 
     // Create cache directory if it doesn't exist
     fs::create_dir_all(&dir)?;
 
     let path = cache_file_path(&cache.repo_root).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Could not determine cache file path")
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not determine cache file path",
+        )
     })?;
 
     let content = serde_json::to_string_pretty(cache)?;
