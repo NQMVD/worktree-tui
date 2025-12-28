@@ -1640,7 +1640,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
     render_worktree_list(frame, app, content_chunks[0]);
