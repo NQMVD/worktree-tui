@@ -25,7 +25,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
@@ -33,6 +33,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
+use tracing::{info, info_span};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 
 
@@ -261,7 +263,9 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
+        let _span = info_span!("App::new").entered();
         let repo_root = Self::find_git_root()?;
+        info!(repo_root = %repo_root.display(), "Initializing App");
         
         let repo_name = repo_root
             .file_name()
@@ -279,14 +283,14 @@ impl App {
             let is_fresh = cached.is_fresh();
             let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
             if is_fresh {
-                // Cache is fresh, no need to refresh
+                info!(count = worktrees.len(), "Cache hit (fresh)");
                 (worktrees, LoadingState::Idle)
             } else {
-                // Cache is stale, show it but trigger background refresh
+                info!(count = worktrees.len(), "Cache hit (stale), triggering background refresh");
                 (worktrees, LoadingState::Loading)
             }
         } else {
-            // No cache, need to load
+            info!("Cache miss, triggering background load");
             (Vec::new(), LoadingState::Loading)
         };
 
@@ -468,6 +472,8 @@ impl App {
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
+        let _span = info_span!("refresh_worktrees").entered();
+        info!("Synchronous worktree refresh started");
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["worktree", "list", "--porcelain"])
@@ -2728,6 +2734,24 @@ const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logging
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/wtt.log")
+        .expect("Failed to open log file");
+        
+    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+    
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with(fmt::layer()
+            .with_writer(non_blocking)
+            .with_ansi(false)
+            .with_span_events(fmt::format::FmtSpan::CLOSE))
+        .init();
+
+    info!("Starting worktree-tui");
     // Parse --cwd-file argument (for shell integration)
     let cwd_file: Option<PathBuf> = std::env::args()
         .skip(1)
@@ -2867,6 +2891,8 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
 
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
 fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
+    let _span = info_span!("fetch_all_worktrees").entered();
+    info!(repo_root = %repo_root.display(), "Fetching all worktrees");
     let output = Command::new("git")
         .current_dir(repo_root)
         .args(["worktree", "list", "--porcelain"])
@@ -2901,25 +2927,37 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
             // 1. Status Porcelain Task
             let p1 = path.clone();
             task_handles.push(s.spawn(move || {
-                GitResult::StatusPorcelain(i, App::get_worktree_status_porcelain(&p1))
+                let _span = info_span!("get_worktree_status_porcelain", wt_idx = i, path = %p1.display()).entered();
+                let res = App::get_worktree_status_porcelain(&p1);
+                info!(?res, "Status porcelain fetched");
+                GitResult::StatusPorcelain(i, res)
             }));
             
             // 2. Ahead/Behind Task
             let p2 = path.clone();
             task_handles.push(s.spawn(move || {
-                GitResult::AheadBehind(i, App::get_worktree_ahead_behind(&p2))
+                let _span = info_span!("get_worktree_ahead_behind", wt_idx = i, path = %p2.display()).entered();
+                let res = App::get_worktree_ahead_behind(&p2);
+                info!(?res, "Ahead/behind fetched");
+                GitResult::AheadBehind(i, res)
             }));
             
             // 3. Commit Info Task
             let p3 = path.clone();
             task_handles.push(s.spawn(move || {
-                GitResult::Commit(i, App::get_commit_info(&p3))
+                let _span = info_span!("get_commit_info", wt_idx = i, path = %p3.display()).entered();
+                let res = App::get_commit_info(&p3);
+                info!(?res, "Commit info fetched");
+                GitResult::Commit(i, res)
             }));
             
             // 4. Recent Commits Task
             let p4 = path.clone();
             task_handles.push(s.spawn(move || {
-                GitResult::Recent(i, App::get_recent_commits(&p4, 10))
+                let _span = info_span!("get_recent_commits", wt_idx = i, path = %p4.display()).entered();
+                let res = App::get_recent_commits(&p4, 10);
+                info!(count = res.len(), "Recent commits fetched");
+                GitResult::Recent(i, res)
             }));
         }
         
