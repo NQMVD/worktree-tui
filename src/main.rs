@@ -1732,7 +1732,10 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .row_highlight_style(
             Style::default().bg(colors::SELECTION_BG), // .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol(" ");
+        .highlight_symbol(Span::styled(
+            "> ",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY),
+        ));
 
     frame.render_stateful_widget(table, area, &mut app.table_state);
 
@@ -1981,8 +1984,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Normal => vec![
             ("j/k", "nav"),
             ("1-9", "jump"),
-            ("y", "copy"),
             ("p/P", "pull/push"),
+            ("x", "delete"),
             ("m", "merge"),
             ("s", "sort"),
             ("/", "search"),
