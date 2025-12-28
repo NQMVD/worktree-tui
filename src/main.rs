@@ -46,7 +46,7 @@ mod colors {
 
     // Semantic colors
     pub const SUCCESS: Color = Color::Rgb(134, 239, 172);
-    pub const WARNING: Color = Color::Rgb(230 + 10, 185 + 30, 157 - 10);
+    pub const WARNING: Color = Color::Rgb(235, 200, 142);
     pub const ERROR: Color = Color::Rgb(248, 113, 113);
     pub const INFO: Color = Color::Rgb(147, 197, 253);
     pub const PURPLE: Color = Color::Rgb(196, 181, 253);
@@ -70,6 +70,7 @@ struct Worktree {
     commit_message: String,
     commit_time: Option<i64>,
     is_main: bool,
+    is_current: bool,
     is_bare: bool,
     is_detached: bool,
     is_locked: bool,
@@ -199,6 +200,7 @@ struct App {
     // Repository info
     repo_root: PathBuf,
     repo_name: String,
+    current_worktree_path: PathBuf,
 
     // UI state
     status_message: Option<StatusMessage>,
@@ -240,6 +242,12 @@ impl App {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "repository".to_string());
 
+        // Get the current worktree path (where the program was run from)
+        let current_worktree_path = std::env::current_dir()
+            .ok()
+            .and_then(|p| dunce::canonicalize(p).ok())
+            .unwrap_or_else(|| repo_root.clone());
+
         let mut app = Self {
             worktrees: Vec::new(),
             table_state: TableState::default(),
@@ -248,6 +256,7 @@ impl App {
 
             repo_root,
             repo_name,
+            current_worktree_path,
 
             status_message: None,
             sort_order: SortOrder::Recent,
@@ -334,7 +343,7 @@ impl App {
         }
 
         let content = String::from_utf8(output.stdout)?;
-        self.worktrees = Self::parse_worktree_list(&content, &self.repo_root)?;
+        self.worktrees = Self::parse_worktree_list(&content, &self.repo_root, &self.current_worktree_path)?;
         self.last_refresh = Instant::now();
 
         // Fetch additional status for each worktree
@@ -402,7 +411,7 @@ impl App {
         }
     }
 
-    fn parse_worktree_list(content: &str, repo_root: &PathBuf) -> Result<Vec<Worktree>> {
+    fn parse_worktree_list(content: &str, repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
         let mut worktrees = Vec::new();
         let mut current: Option<Worktree> = None;
 
@@ -413,6 +422,8 @@ impl App {
                 }
                 let path = PathBuf::from(line.strip_prefix("worktree ").unwrap());
                 let is_main = path == *repo_root;
+                // Check if this worktree contains the current working directory
+                let is_current = current_path.starts_with(&path);
                 current = Some(Worktree {
                     path,
                     branch: None,
@@ -421,6 +432,7 @@ impl App {
                     commit_message: String::new(),
                     commit_time: None,
                     is_main,
+                    is_current,
                     is_bare: false,
                     is_detached: false,
                     is_locked: false,
@@ -1695,7 +1707,10 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw(" ")
             };
 
-            let icon = if wt.is_main {
+            let icon = if wt.is_current {
+                // Highlight the worktree we're currently in
+                Span::styled("*", Style::default().fg(colors::CLAUDE_CREAM)) // other ones: ○ 
+            } else if wt.is_main {
                 Span::styled("", Style::default().fg(colors::CLAUDE_ORANGE))
             } else if wt.is_locked {
                 Span::styled("", Style::default().fg(colors::WARNING))
@@ -1765,7 +1780,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().bg(colors::SELECTION_BG), // .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(Span::styled(
-            "> ",
+            "→ ",
             Style::default().fg(colors::CLAUDE_WARM_GRAY),
         ));
 
