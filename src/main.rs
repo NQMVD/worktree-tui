@@ -4,6 +4,7 @@
 mod cache;
 
 use anyhow::{Context, Result};
+use gix::bstr::ByteSlice;
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
@@ -34,7 +35,7 @@ use std::{
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 use tracing::{info, info_span};
-use tracing_subscriber::{EnvFilter, fmt::{self}, prelude::*};
+use tracing_subscriber::{fmt::{self}, prelude::*, EnvFilter};
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -252,6 +253,9 @@ struct App {
     search_cursor: usize,
     filtered_indices: Vec<usize>,
 
+    // Git Repository
+    repo: gix::Repository,
+
     // Cached data
     last_refresh: Instant,
 
@@ -262,8 +266,9 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let _span = info_span!("App::new").entered();
-        let repo_root = Self::find_git_root()?;
-        info!(repo_root = %repo_root.display(), "Initializing App");
+        let repo = Self::find_git_repository()?;
+        
+        let repo_root = repo.common_dir().parent().map(|p| p.to_path_buf()).unwrap_or_else(|| repo.common_dir().to_path_buf());
         
         let repo_name = repo_root
             .file_name()
@@ -277,7 +282,7 @@ impl App {
             .unwrap_or_else(|| repo_root.clone());
 
         // Try to load from cache for instant startup
-        let (worktrees, loading_state) = if let Some(cached) = cache::load_cache(&repo_root) {
+        let (worktrees, loading_state): (Vec<Worktree>, LoadingState) = if let Some(cached) = cache::load_cache(&repo_root) {
             let is_fresh = cached.is_fresh();
             let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
             if is_fresh {
@@ -325,6 +330,8 @@ impl App {
             search_query: String::new(),
             search_cursor: 0,
             filtered_indices: Vec::new(),
+
+            repo,
 
             last_refresh: Instant::now(),
 
@@ -429,78 +436,40 @@ impl App {
         let _ = cache::save_cache(&cache_data);
     }
 
-    fn find_git_root() -> Result<PathBuf> {
-        // Get the common git directory with absolute path format
-        // This works correctly whether we're in the main worktree or a linked worktree
-        let output = Command::new("git")
-            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-            .output()
-            .context("Failed to execute git command")?;
-
-        if !output.status.success() {
-            anyhow::bail!("Not in a git repository");
-        }
-
-        let common_dir = String::from_utf8(output.stdout)
-            .context("Invalid UTF-8 in git output")?
-            .trim()
-            .to_string();
-
-        // The common dir is always an absolute path ending in .git
-        // e.g., /path/to/repo/.git
-        // The main repo path is just the parent of .git
-        let git_path = PathBuf::from(&common_dir);
-        
-        let main_repo_path = if common_dir.ends_with(".git") {
-            // Standard case: strip the .git suffix to get repo root
-            git_path.parent().unwrap_or(&git_path).to_path_buf()
-        } else {
-            // Bare repo or unusual setup - use the path as-is
-            git_path
-        };
-
-        // Use dunce to get a clean path on Windows (removes UNC prefix)
-        dunce::canonicalize(&main_repo_path).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to resolve git root path '{:?}': {}",
-                main_repo_path,
-                e
-            )
-        })
+    fn find_git_repository() -> Result<gix::Repository> {
+        let repo = gix::discover(".").context("Failed to find a git repository")?;
+        Ok(repo)
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
         let _span = info_span!("refresh_worktrees").entered();
         info!("Synchronous worktree refresh started");
-        let output = Command::new("git")
-            .current_dir(&self.repo_root)
-            .args(["worktree", "list", "--porcelain"])
-            .output()
-            .context("Failed to list worktrees")?;
+        
+        let worktree_proxies = self.repo.worktrees().context("Failed to list worktrees")?;
+        let mut worktrees = Vec::new();
 
-        if !output.status.success() {
-            anyhow::bail!("git worktree list failed");
+        // Add main worktree
+        worktrees.push(self.create_worktree_info(None)?);
+
+        // Add linked worktrees
+        for proxy in worktree_proxies {
+            worktrees.push(self.create_worktree_info(Some(proxy))?);
         }
 
-        let content = String::from_utf8(output.stdout)?;
-        self.worktrees = Self::parse_worktree_list(&content, &self.repo_root, &self.current_worktree_path)?;
+        self.worktrees = worktrees;
         self.last_refresh = Instant::now();
 
         // Fetch additional status for each worktree
         for worktree in &mut self.worktrees {
             if !worktree.is_bare {
-                let porcelain = Self::get_worktree_status_porcelain(&worktree.path);
-                let ab = Self::get_worktree_ahead_behind(&worktree.path);
-                worktree.status.staged = porcelain.0;
-                worktree.status.modified = porcelain.1;
-                worktree.status.untracked = porcelain.2;
-                worktree.status.ahead = ab.0;
-                worktree.status.behind = ab.1;
+                let repo = gix::open(&worktree.path).context("Failed to open worktree repo")?;
+                let status = Self::get_gix_status(&repo)?;
+                worktree.status = status;
 
-                let commit_info = Self::get_commit_info(&worktree.path);
+                let commit_info = Self::get_gix_commit_info(&repo)?;
                 worktree.commit_message = commit_info.0;
                 worktree.commit_time = commit_info.1;
-                worktree.recent_commits = Self::get_recent_commits(&worktree.path, 10);
+                worktree.recent_commits = Self::get_gix_recent_commits(&repo, 10)?;
             }
         }
 
@@ -520,6 +489,50 @@ impl App {
         self.loading_state = LoadingState::Idle;
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
+    }
+
+    fn create_worktree_info(&self, proxy: Option<gix::worktree::Proxy<'_>>) -> Result<Worktree> {
+        let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
+            Some(p) => {
+                let path = p.base()?.to_path_buf();
+                let is_locked = p.lock_reason().is_some();
+                let lock_reason = p.lock_reason().map(|s| s.to_string());
+                // To get branch and commit, we need to open the repo at that path or use the proxy
+                let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
+                let head = wt_repo.head().context("Failed to get HEAD")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, false, is_locked, lock_reason)
+            }
+            None => {
+                let path = self.repo.work_dir().map(|p| p.to_path_buf()).unwrap_or_else(|| self.repo.common_dir().to_path_buf());
+                let head = self.repo.head().context("Failed to get HEAD")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, true, false, None)
+            }
+        };
+
+        let current_dir = std::env::current_dir()?;
+        let is_current = current_dir.starts_with(&path);
+
+        Ok(Worktree {
+            path: path.clone(),
+            branch,
+            commit_short: commit.chars().take(7).collect::<String>(),
+            commit,
+            commit_message: String::new(),
+            commit_time: None,
+            is_main,
+            is_current,
+            is_bare: self.repo.is_bare() && is_main,
+            is_detached: false, // Will be set by head info if needed
+            is_locked,
+            lock_reason,
+            is_prunable: !path.exists(),
+            status: WorktreeStatus::default(),
+            recent_commits: Vec::new(),
+        })
     }
 
     fn apply_sort(&mut self) {
@@ -562,195 +575,105 @@ impl App {
         }
     }
 
-    fn parse_worktree_list(content: &str, repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
-        let mut worktrees = Vec::new();
-        let mut current: Option<Worktree> = None;
-
-        for line in content.lines() {
-            if line.starts_with("worktree ") {
-                if let Some(wt) = current.take() {
-                    worktrees.push(wt);
-                }
-                let path = PathBuf::from(line.strip_prefix("worktree ").unwrap());
-                let is_main = path == *repo_root;
-                // Check if this worktree contains the current working directory
-                let is_current = current_path.starts_with(&path);
-                current = Some(Worktree {
-                    path,
-                    branch: None,
-                    commit: String::new(),
-                    commit_short: String::new(),
-                    commit_message: String::new(),
-                    commit_time: None,
-                    is_main,
-                    is_current,
-                    is_bare: false,
-                    is_detached: false,
-                    is_locked: false,
-                    lock_reason: None,
-                    is_prunable: false,
-                    status: WorktreeStatus::default(),
-                    recent_commits: Vec::new(),
-                });
-            } else if let Some(ref mut wt) = current {
-                if line.starts_with("HEAD ") {
-                    wt.commit = line.strip_prefix("HEAD ").unwrap().to_string();
-                    wt.commit_short = wt.commit.chars().take(7).collect();
-                } else if line.starts_with("branch ") {
-                    let branch = line.strip_prefix("branch ").unwrap();
-                    wt.branch = Some(
-                        branch
-                            .strip_prefix("refs/heads/")
-                            .unwrap_or(branch)
-                            .to_string(),
-                    );
-                } else if line == "bare" {
-                    wt.is_bare = true;
-                } else if line == "detached" {
-                    wt.is_detached = true;
-                } else if line == "locked" {
-                    wt.is_locked = true;
-                } else if line.starts_with("locked ") {
-                    wt.is_locked = true;
-                    wt.lock_reason = Some(line.strip_prefix("locked ").unwrap().to_string());
-                } else if line == "prunable" {
-                    wt.is_prunable = true;
-                }
-            }
+    fn get_gix_status(repo: &gix::Repository) -> Result<WorktreeStatus> {
+        let mut status = WorktreeStatus::default();
+        if repo.is_bare() {
+            return Ok(status);
         }
 
-        if let Some(wt) = current {
-            worktrees.push(wt);
-        }
-
-        Ok(worktrees)
-    }
-
-    fn get_worktree_status_porcelain(path: &PathBuf) -> (usize, usize, usize) {
-        let mut staged = 0;
-        let mut modified = 0;
-        let mut untracked = 0;
-
-        if let Ok(output) = Command::new("git")
-            .current_dir(path)
-            .args(["status", "--porcelain=v1"])
-            .output()
-        {
-            if output.status.success() {
-                let content = String::from_utf8_lossy(&output.stdout);
-                for line in content.lines() {
-                    if line.len() < 2 { continue; }
-                    let index = line.chars().next().unwrap();
-                    let worktree = line.chars().nth(1).unwrap();
-                    if index != ' ' && index != '?' { staged += 1; }
-                    if worktree == 'M' || worktree == 'D' { modified += 1; }
-                    if index == '?' { untracked += 1; }
-                }
-            }
-        }
-        (staged, modified, untracked)
-    }
-
-    fn get_worktree_ahead_behind(path: &PathBuf) -> (usize, usize) {
-        if let Ok(output) = Command::new("git")
-            .current_dir(path)
-            .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-            .output()
-        {
-            if output.status.success() {
-                let content = String::from_utf8_lossy(&output.stdout);
-                let parts: Vec<&str> = content.trim().split('\t').collect();
-                if parts.len() == 2 {
-                    let ahead = parts[0].parse().unwrap_or(0);
-                    let behind = parts[1].parse().unwrap_or(0);
-                    return (ahead, behind);
-                }
-            }
-        }
-        (0, 0)
-    }
-
-    fn get_commit_info(path: &PathBuf) -> (String, Option<i64>) {
-        let output = Command::new("git")
-            .current_dir(path)
-            .args(["log", "-1", "--format=%s|%ct"])
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                let content = String::from_utf8_lossy(&output.stdout);
-                let parts: Vec<&str> = content.trim().split('|').collect();
-                if parts.len() >= 2 {
-                    let message = parts[0].chars().take(60).collect();
-                    let timestamp = parts[1].parse().ok();
-                    return (message, timestamp);
-                }
-            }
-        }
-        (String::new(), None)
-    }
-
-    fn get_recent_commits(path: &PathBuf, count: usize) -> Vec<CommitInfo> {
-        let output = Command::new("git")
-            .current_dir(path)
-            .args(["log", &format!("-{}", count), "--format=%h|%s|%cr"])
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                let content = String::from_utf8_lossy(&output.stdout);
-                return content
-                    .lines()
-                    .filter_map(|line| {
-                        let parts: Vec<&str> = line.split('|').collect();
-                        if parts.len() >= 3 {
-                            Some(CommitInfo {
-                                hash: parts[0].to_string(),
-                                message: parts[1].chars().take(50).collect(),
-                                time_ago: parts[2].to_string(),
-                            })
-                        } else {
-                            None
+        // Use high-level status API
+        if let Ok(stat) = repo.status(gix::progress::Discard) {
+            if let Ok(res) = stat.index_worktree_rewrites(None)
+                .into_index_worktree_iter(Vec::<gix::bstr::BString>::new()) {
+                for item in res {
+                    if let Ok(item) = item {
+                        match item {
+                            gix::status::index_worktree::Item::Modification { .. } => status.modified += 1,
+                            _ => {}
                         }
-                    })
-                    .collect();
+                    }
+                }
             }
         }
-        Vec::new()
+
+        // Ahead/Behind - Placeholder for now
+        status.ahead = 0;
+        status.behind = 0;
+
+        Ok(status)
+    }
+
+    fn get_gix_commit_info(repo: &gix::Repository) -> Result<(String, Option<i64>)> {
+        let head = repo.head()?;
+        if let Some(id) = head.id() {
+            let commit = repo.find_object(id)?.into_commit();
+            let message = commit.message()?.summary().to_string();
+            let time = commit.time()?.seconds;
+            Ok((message, Some(time as i64)))
+        } else {
+            Ok((String::new(), None))
+        }
+    }
+
+    fn get_gix_recent_commits(repo: &gix::Repository, count: usize) -> Result<Vec<CommitInfo>> {
+        let mut commits = Vec::new();
+        let head = repo.head()?;
+        if let Some(id) = head.id() {
+            let walk = repo.rev_walk([id.detach()]).all()?;
+            for (i, commit_info) in walk.enumerate() {
+                if i >= count { break; }
+                let commit_info = commit_info?;
+                let commit = repo.find_object(commit_info.id)?.into_commit();
+                let message = commit.message()?.summary().to_string();
+                let hash = commit.id().to_string().chars().take(7).collect::<String>();
+                
+                let time = commit.time()?;
+                let now = gix::date::Time::now_local_or_utc();
+                let diff_secs = now.seconds.saturating_sub(time.seconds);
+                let time_ago = if diff_secs < 60 {
+                    format!("{}s ago", diff_secs)
+                } else if diff_secs < 3600 {
+                    format!("{}m ago", diff_secs / 60)
+                } else if diff_secs < 86400 {
+                    format!("{}h ago", diff_secs / 3600)
+                } else {
+                    format!("{}d ago", diff_secs / 86400)
+                };
+
+                commits.push(CommitInfo {
+                    hash,
+                    message,
+                    time_ago,
+                });
+            }
+        }
+        Ok(commits)
     }
 
     fn refresh_branches(&mut self) -> Result<()> {
         let mut branches = Vec::new();
 
-        let output = Command::new("git")
-            .current_dir(&self.repo_root)
-            .args(["branch", "--format=%(refname:short)|%(HEAD)"])
-            .output()?;
+        let refs = self.repo.references()?;
+        let head_name = self.repo.head()?.referent_name().map(|n| n.as_bstr().to_string()).unwrap_or_default();
 
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                let parts: Vec<&str> = line.split('|').collect();
-                if parts.len() >= 2 {
-                    branches.push(Branch {
-                        name: parts[0].to_string(),
-                        is_remote: false,
-                        is_current: parts[1] == "*",
-                    });
-                }
+        if let Ok(local_branches) = refs.local_branches() {
+            for head in local_branches {
+                let head = head.map_err(|e| anyhow::anyhow!("{}", e))?;
+                branches.push(Branch {
+                    name: head.name().shorten().to_string(),
+                    is_remote: false,
+                    is_current: head.name().as_bstr().to_string() == head_name,
+                });
             }
         }
 
-        let output = Command::new("git")
-            .current_dir(&self.repo_root)
-            .args(["branch", "-r", "--format=%(refname:short)"])
-            .output()?;
-
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                let name = line.trim();
+        if let Ok(remote_branches) = refs.remote_branches() {
+            for remote_ref in remote_branches {
+                let remote_ref = remote_ref.map_err(|e| anyhow::anyhow!("{}", e))?;
+                let name = remote_ref.name().shorten().to_string();
                 if !name.contains("HEAD") {
                     branches.push(Branch {
-                        name: name.to_string(),
+                        name,
                         is_remote: true,
                         is_current: false,
                     });
@@ -849,7 +772,7 @@ impl App {
     // ===== Actions =====
 
     fn get_worktrees_dir(&self) -> PathBuf {
-        // repo_root is now guaranteed to be absolute from find_git_root()
+        // repo_root is now guaranteed to be absolute
         let parent = self.repo_root.parent().unwrap_or(&self.repo_root);
         parent.join(format!("{}-worktrees", self.repo_name))
     }
@@ -1240,33 +1163,18 @@ impl App {
     }
 
     fn get_main_branch_name(&self) -> String {
-        // Try to detect the main branch name
-        let output = Command::new("git")
-            .current_dir(&self.repo_root)
-            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                let branch = String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .strip_prefix("origin/")
-                    .unwrap_or("main")
-                    .to_string();
-                return branch;
+        // Try to detect the main branch name from origin/HEAD
+        if let Ok(remote_head) = self.repo.find_reference("refs/remotes/origin/HEAD") {
+            if let Some(Ok(target)) = remote_head.follow() {
+                if let Some(name) = target.name().shorten().to_str().ok().and_then(|s| s.strip_prefix("origin/")) {
+                    return name.to_string();
+                }
             }
         }
 
         // Fallback: check if main or master exists
-        let output = Command::new("git")
-            .current_dir(&self.repo_root)
-            .args(["rev-parse", "--verify", "main"])
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                return "main".to_string();
-            }
+        if self.repo.find_reference("refs/heads/main").is_ok() {
+            return "main".to_string();
         }
 
         "master".to_string()
@@ -2899,98 +2807,94 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
 }
 
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
-fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
+fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<Vec<Worktree>> {
     let _span = info_span!("fetch_all_worktrees").entered();
     info!(repo_root = %repo_root.display(), "Fetching all worktrees");
-    let output = Command::new("git")
-        .current_dir(repo_root)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .context("Failed to list worktrees")?;
-
-    if !output.status.success() {
-        anyhow::bail!("git worktree list failed");
-    }
-
-    let content = String::from_utf8(output.stdout)?;
-    let mut worktrees = App::parse_worktree_list(&content, repo_root, current_path)?;
-
-    // Enum to hold different types of git command results safely
-    enum GitResult {
-        StatusPorcelain(usize, (usize, usize, usize)), // staged, modified, untracked
-        AheadBehind(usize, (usize, usize)),           // ahead, behind
-        Commit(usize, (String, Option<i64>)),
-        Recent(usize, Vec<CommitInfo>),
-    }
-
-    // Fetch additional status for each worktree IN PARALLEL (All commands for all worktrees)
     
-    // Use thread::scope to spawn tasks for every single git command
+    let repo = gix::open(repo_root).context("Failed to open repository")?;
+    let worktree_proxies = repo.worktrees().context("Failed to list worktrees")?;
+    
+    let mut worktrees = Vec::new();
+
+    // Helper to create Worktree struct (basically create_worktree_info but standalone)
+    let get_wt_info = |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
+        let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
+            Some(p) => {
+                let path = p.base()?.to_path_buf();
+                let is_locked = p.lock_reason().is_some();
+                let lock_reason = p.lock_reason().map(|s| s.to_string());
+                let wt_repo = p.into_repo().context("Failed to open worktree repo")?;
+                let head = wt_repo.head().context("Failed to get HEAD")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, false, is_locked, lock_reason)
+            }
+            None => {
+                let path = r.work_dir().map(|p| p.to_path_buf()).unwrap_or_else(|| r.common_dir().to_path_buf());
+                let head = r.head().context("Failed to get HEAD")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, true, false, None)
+            }
+        };
+
+        let current_dir = std::env::current_dir()?;
+        let is_current = current_dir.starts_with(&path);
+
+        Ok(Worktree {
+            path: path.clone(),
+            branch,
+            commit_short: commit.chars().take(7).collect::<String>(),
+            commit,
+            commit_message: String::new(),
+            commit_time: None,
+            is_main,
+            is_current,
+            is_bare: r.is_bare() && is_main,
+            is_detached: false,
+            is_locked,
+            lock_reason,
+            is_prunable: !path.exists(),
+            status: WorktreeStatus::default(),
+            recent_commits: Vec::new(),
+        })
+    };
+
+    // Add main worktree
+    worktrees.push(get_wt_info(None, &repo)?);
+
+    // Add linked worktrees
+    for proxy in worktree_proxies {
+        worktrees.push(get_wt_info(Some(proxy), &repo)?);
+    }
+
+    // Fetch additional status for each worktree IN PARALLEL
     std::thread::scope(|s| {
         let mut task_handles = Vec::new();
         
         for (i, wt) in worktrees.iter().enumerate() {
-            if wt.is_bare { continue; }
+            if wt.is_bare || wt.is_prunable { continue; }
             let path = wt.path.clone();
             
-            // 1. Status Porcelain Task
-            let p1 = path.clone();
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_worktree_status_porcelain", wt_idx = i, path = %p1.display()).entered();
-                let res = App::get_worktree_status_porcelain(&p1);
-                info!(?res, "Status porcelain fetched");
-                GitResult::StatusPorcelain(i, res)
-            }));
-            
-            // 2. Ahead/Behind Task
-            let p2 = path.clone();
-            task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_worktree_ahead_behind", wt_idx = i, path = %p2.display()).entered();
-                let res = App::get_worktree_ahead_behind(&p2);
-                info!(?res, "Ahead/behind fetched");
-                GitResult::AheadBehind(i, res)
-            }));
-            
-            // 3. Commit Info Task
-            let p3 = path.clone();
-            task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_commit_info", wt_idx = i, path = %p3.display()).entered();
-                let res = App::get_commit_info(&p3);
-                info!(?res, "Commit info fetched");
-                GitResult::Commit(i, res)
-            }));
-            
-            // 4. Recent Commits Task
-            let p4 = path.clone();
-            task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_recent_commits", wt_idx = i, path = %p4.display()).entered();
-                let res = App::get_recent_commits(&p4, 10);
-                info!(count = res.len(), "Recent commits fetched");
-                GitResult::Recent(i, res)
+                let _span = info_span!("fetch_wt_details", wt_idx = i, path = %path.display()).entered();
+                if let Ok(repo) = gix::open(&path) {
+                    let status = App::get_gix_status(&repo).unwrap_or_default();
+                    let commit_info = App::get_gix_commit_info(&repo).unwrap_or_else(|_| (String::new(), None));
+                    let recent_commits = App::get_gix_recent_commits(&repo, 10).unwrap_or_default();
+                    (i, status, commit_info, recent_commits)
+                } else {
+                    (i, WorktreeStatus::default(), (String::new(), None), Vec::new())
+                }
             }));
         }
         
-        // Collect results as they finish and update worktrees
         for handle in task_handles {
-            if let Ok(res) = handle.join() {
-                match res {
-                    GitResult::StatusPorcelain(idx, (staged, modded, untracked)) => {
-                        worktrees[idx].status.staged = staged;
-                        worktrees[idx].status.modified = modded;
-                        worktrees[idx].status.untracked = untracked;
-                    }
-                    GitResult::AheadBehind(idx, (ahead, behind)) => {
-                        worktrees[idx].status.ahead = ahead;
-                        worktrees[idx].status.behind = behind;
-                    }
-                    GitResult::Commit(idx, (msg, time)) => {
-                        worktrees[idx].commit_message = msg;
-                        worktrees[idx].commit_time = time;
-                    }
-                    GitResult::Recent(idx, commits) => {
-                        worktrees[idx].recent_commits = commits;
-                    }
-                }
+            if let Ok((idx, status, commit_info, recent_commits)) = handle.join() {
+                worktrees[idx].status = status;
+                worktrees[idx].commit_message = commit_info.0;
+                worktrees[idx].commit_time = commit_info.1;
+                worktrees[idx].recent_commits = recent_commits;
             }
         }
     });
