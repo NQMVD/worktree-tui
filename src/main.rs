@@ -200,7 +200,6 @@ struct App {
     worktrees: Vec<Worktree>,
     table_state: TableState,
     mode: AppMode,
-    focused_pane: FocusedPane,
     should_quit: bool,
 
     // Repository info
@@ -251,14 +250,13 @@ impl App {
             worktrees: Vec::new(),
             table_state: TableState::default(),
             mode: AppMode::Normal,
-            focused_pane: FocusedPane::WorktreeList,
             should_quit: false,
 
             repo_root,
             repo_name,
 
             status_message: None,
-            sort_order: SortOrder::Name,
+            sort_order: SortOrder::Recent,
             show_recent_commits: true,
 
             create_input: String::new(),
@@ -1693,8 +1691,17 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(display_idx, &idx)| {
             let wt = &app.worktrees[idx];
-            // get the main worktree too
-            let main_wt = app.worktrees.iter().find(|wt| wt.is_main).unwrap();
+            // get the main worktree too if not main already
+            let main_wt = if wt.is_main {
+                Some(wt)
+            } else {
+                app.worktrees.iter().find(|wt| wt.is_main)
+            };
+
+            if main_wt.is_none() {
+                app.error_message = "No main worktree found!".into();
+                app.mode = AppMode::Error;
+            }
 
             let num = if display_idx < 9 {
                 Span::styled(
@@ -1738,10 +1745,14 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
             let commit_style = if wt.is_main {
                 Style::default().fg(colors::PURPLE)
             } else {
-                if wt.commit == main_wt.commit {
-                    Style::default().fg(colors::PURPLE)
-                } else {
+                if main_wt.is_none() {
                     Style::default().fg(colors::CLAUDE_WARM_GRAY)
+                } else {
+                    if wt.commit == main_wt.unwrap().commit {
+                        Style::default().fg(colors::PURPLE)
+                    } else {
+                        Style::default().fg(colors::CLAUDE_WARM_GRAY)
+                    }
                 }
             };
 
