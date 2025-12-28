@@ -137,12 +137,6 @@ enum AppMode {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FocusedPane {
-    WorktreeList,
-    Details,
-}
-
 #[derive(Debug, Clone)]
 struct StatusMessage {
     text: String,
@@ -289,9 +283,10 @@ impl App {
     }
 
     fn find_git_root() -> Result<PathBuf> {
-        // Get the common git directory (shared across all worktrees)
+        // Get the common git directory with absolute path format
+        // This works correctly whether we're in the main worktree or a linked worktree
         let output = Command::new("git")
-            .args(["rev-parse", "--git-common-dir"])
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
             .output()
             .context("Failed to execute git command")?;
 
@@ -304,32 +299,20 @@ impl App {
             .trim()
             .to_string();
 
-        // The common dir is either:
-        // - <repo>/.git (for main worktree or non-worktree repos)
-        // - <repo>/.git/worktrees/<name> (for linked worktrees)
-        let path = PathBuf::from(&common_dir);
-
-        // Check if we're in a linked worktree (path contains .git/worktrees/)
-        let components: Vec<&str> = common_dir.split("/.git/").collect();
-
-        let main_repo_path = if components.len() > 1 && components[1].starts_with("worktrees/") {
-            // We're in a linked worktree: <repo>/.git/worktrees/<name>
-            // Need to go up 4 levels: worktrees/<name> -> worktrees -> .git -> <repo>
-            let repo_path = path
-                .parent() // worktrees/<name>
-                .and_then(|p| p.parent()) // worktrees
-                .and_then(|p| p.parent()) // .git
-                .and_then(|p| p.parent()); // main repo
-            repo_path.unwrap_or(&path).to_path_buf()
-        } else if common_dir.ends_with("/.git") || common_dir.ends_with("/.git\n") {
-            // Common dir ends with .git, so parent is the main repo
-            path.parent().unwrap_or(&path).to_path_buf()
+        // The common dir is always an absolute path ending in .git
+        // e.g., /path/to/repo/.git
+        // The main repo path is just the parent of .git
+        let git_path = PathBuf::from(&common_dir);
+        
+        let main_repo_path = if common_dir.ends_with(".git") {
+            // Standard case: strip the .git suffix to get repo root
+            git_path.parent().unwrap_or(&git_path).to_path_buf()
         } else {
-            // Fallback: path itself might be the repo
-            path
+            // Bare repo or unusual setup - use the path as-is
+            git_path
         };
 
-        // Resolve to absolute path
+        // Use dunce to get a clean path on Windows (removes UNC prefix)
         dunce::canonicalize(&main_repo_path).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to resolve git root path '{:?}': {}",
