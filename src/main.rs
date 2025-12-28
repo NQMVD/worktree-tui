@@ -621,28 +621,53 @@ impl App {
             return Ok(status);
         }
 
-        // Use high-level status API
-        if let Ok(stat) = repo.status(gix::progress::Discard) {
-            if let Ok(res) = stat
-                .index_worktree_rewrites(None)
-                .into_index_worktree_iter(Vec::<gix::bstr::BString>::new())
+        // We use git status --porcelain for reliable detection of all states
+        // while gix's status API is still maturing for high-level use.
+        if let Some(workdir) = repo.workdir() {
+            if let Ok(output) = Command::new("git")
+                .current_dir(workdir)
+                .args(["status", "--porcelain"])
+                .output()
             {
-                for item in res {
-                    if let Ok(item) = item {
-                        match item {
-                            gix::status::index_worktree::Item::Modification { .. } => {
-                                status.modified += 1
+                if output.status.success() {
+                    for line in String::from_utf8_lossy(&output.stdout).lines() {
+                        if line.len() >= 2 {
+                            let index = line.chars().next().unwrap();
+                            let worktree = line.chars().nth(1).unwrap();
+                            if index != ' ' && index != '?' {
+                                status.staged += 1;
                             }
-                            _ => {}
+                            if worktree == 'M' || worktree == 'D' {
+                                status.modified += 1;
+                            }
+                            if index == '?' {
+                                status.untracked += 1;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Ahead/Behind - Placeholder for now
-        status.ahead = 0;
-        status.behind = 0;
+        // Ahead/Behind - simplified implementation
+        if let Ok(head) = repo.head() {
+            if let Some(Ok(remote_ref)) = head.referent_name().and_then(|name| {
+                repo.branch_remote_ref_name(name, gix::remote::Direction::Fetch)
+            }) {
+                if let Ok(upstream_id) =
+                    repo.find_reference(remote_ref.as_ref()).and_then(|r| Ok(r.id()))
+                {
+                    if let Some(head_id) = head.id() {
+                        if let Ok(walk) = repo.rev_walk([head_id.detach()]).all() {
+                            status.ahead = walk.count();
+                        }
+                        if let Ok(walk) = repo.rev_walk([upstream_id.detach()]).all() {
+                            status.behind = walk.count();
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(status)
     }
