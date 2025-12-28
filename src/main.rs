@@ -630,7 +630,7 @@ impl App {
 
         if let Ok(output) = Command::new("git")
             .current_dir(path)
-            .args(["status", "--porcelain=v1", "--branch", "--no-optional-locks", "--ignore-submodules=all"])
+            .args(["status", "--porcelain=v1", "--branch"])
             .output()
         {
             if output.status.success() {
