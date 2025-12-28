@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
-use tracing::{info, info_span};
+use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt::{self}, prelude::*};
 
 // ============================================================================
@@ -261,9 +261,7 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
-        let _span = info_span!("App::new").entered();
         let repo_root = Self::find_git_root()?;
-        info!(repo_root = %repo_root.display(), "Initializing App");
         
         let repo_name = repo_root
             .file_name()
@@ -470,8 +468,6 @@ impl App {
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
-        let _span = info_span!("refresh_worktrees").entered();
-        info!("Synchronous worktree refresh started");
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["worktree", "list", "--porcelain"])
@@ -2756,8 +2752,10 @@ async fn main() -> Result<()> {
             .with_writer(non_blocking)
             .with_ansi(false)
             .compact()
-            .with_timer(JustTime)
-            .with_span_events(fmt::format::FmtSpan::CLOSE))
+            .with_target(false)
+            .with_file(false)
+            .with_line_number(false)
+            .with_timer(JustTime))
         .init();
 
     info!("Starting worktree-tui");
@@ -2900,8 +2898,7 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
 
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
 fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
-    let _span = info_span!("fetch_all_worktrees").entered();
-    info!(repo_root = %repo_root.display(), "Fetching all worktrees");
+    let start_all = Instant::now();
     let output = Command::new("git")
         .current_dir(repo_root)
         .args(["worktree", "list", "--porcelain"])
@@ -2915,12 +2912,20 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
     let content = String::from_utf8(output.stdout)?;
     let mut worktrees = App::parse_worktree_list(&content, repo_root, current_path)?;
 
-    // Enum to hold different types of git command results safely
+    // Enum to hold different types of git command results safely with durations
     enum GitResult {
-        StatusPorcelain(usize, (usize, usize, usize)), // staged, modified, untracked
-        AheadBehind(usize, (usize, usize)),           // ahead, behind
-        Commit(usize, (String, Option<i64>)),
-        Recent(usize, Vec<CommitInfo>),
+        StatusPorcelain(usize, (usize, usize, usize), Duration),
+        AheadBehind(usize, (usize, usize), Duration),
+        Commit(usize, (String, Option<i64>), Duration),
+        Recent(usize, Vec<CommitInfo>, Duration),
+    }
+
+    struct PerfEntry {
+        branch: String,
+        status_dur: Option<Duration>,
+        ahead_dur: Option<Duration>,
+        commit_dur: Option<Duration>,
+        recent_dur: Option<Duration>,
     }
 
     // Fetch additional status for each worktree IN PARALLEL (All commands for all worktrees)
@@ -2936,63 +2941,94 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
             // 1. Status Porcelain Task
             let p1 = path.clone();
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_worktree_status_porcelain", wt_idx = i, path = %p1.display()).entered();
+                let start = Instant::now();
                 let res = App::get_worktree_status_porcelain(&p1);
-                info!(?res, "Status porcelain fetched");
-                GitResult::StatusPorcelain(i, res)
+                GitResult::StatusPorcelain(i, res, start.elapsed())
             }));
             
             // 2. Ahead/Behind Task
             let p2 = path.clone();
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_worktree_ahead_behind", wt_idx = i, path = %p2.display()).entered();
+                let start = Instant::now();
                 let res = App::get_worktree_ahead_behind(&p2);
-                info!(?res, "Ahead/behind fetched");
-                GitResult::AheadBehind(i, res)
+                GitResult::AheadBehind(i, res, start.elapsed())
             }));
             
             // 3. Commit Info Task
             let p3 = path.clone();
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_commit_info", wt_idx = i, path = %p3.display()).entered();
+                let start = Instant::now();
                 let res = App::get_commit_info(&p3);
-                info!(?res, "Commit info fetched");
-                GitResult::Commit(i, res)
+                GitResult::Commit(i, res, start.elapsed())
             }));
             
             // 4. Recent Commits Task
             let p4 = path.clone();
             task_handles.push(s.spawn(move || {
-                let _span = info_span!("get_recent_commits", wt_idx = i, path = %p4.display()).entered();
+                let start = Instant::now();
                 let res = App::get_recent_commits(&p4, 10);
-                info!(count = res.len(), "Recent commits fetched");
-                GitResult::Recent(i, res)
+                GitResult::Recent(i, res, start.elapsed())
             }));
         }
         
+        let mut perf_stats: Vec<PerfEntry> = worktrees.iter().map(|wt| PerfEntry {
+            branch: wt.branch.clone().unwrap_or_else(|| "bare".to_string()),
+            status_dur: None,
+            ahead_dur: None,
+            commit_dur: None,
+            recent_dur: None,
+        }).collect();
+
         // Collect results as they finish and update worktrees
         for handle in task_handles {
             if let Ok(res) = handle.join() {
                 match res {
-                    GitResult::StatusPorcelain(idx, (staged, modded, untracked)) => {
+                    GitResult::StatusPorcelain(idx, (staged, modded, untracked), dur) => {
                         worktrees[idx].status.staged = staged;
                         worktrees[idx].status.modified = modded;
                         worktrees[idx].status.untracked = untracked;
+                        perf_stats[idx].status_dur = Some(dur);
                     }
-                    GitResult::AheadBehind(idx, (ahead, behind)) => {
+                    GitResult::AheadBehind(idx, (ahead, behind), dur) => {
                         worktrees[idx].status.ahead = ahead;
                         worktrees[idx].status.behind = behind;
+                        perf_stats[idx].ahead_dur = Some(dur);
                     }
-                    GitResult::Commit(idx, (msg, time)) => {
+                    GitResult::Commit(idx, (msg, time), dur) => {
                         worktrees[idx].commit_message = msg;
                         worktrees[idx].commit_time = time;
+                        perf_stats[idx].commit_dur = Some(dur);
                     }
-                    GitResult::Recent(idx, commits) => {
+                    GitResult::Recent(idx, commits, dur) => {
                         worktrees[idx].recent_commits = commits;
+                        perf_stats[idx].recent_dur = Some(dur);
                     }
                 }
             }
         }
+
+        // Log Performance Summary Table
+        let mut table = String::from("\nRefresh Performance Summary (ms):\n");
+        table.push_str("Branch                          | Status | Ahead  | Commit | Recent | Total\n");
+        table.push_str("--------------------------------|--------|--------|--------|--------|-------\n");
+        
+        for p in perf_stats {
+            let total = p.status_dur.unwrap_or(Duration::ZERO)
+                + p.ahead_dur.unwrap_or(Duration::ZERO)
+                + p.commit_dur.unwrap_or(Duration::ZERO)
+                + p.recent_dur.unwrap_or(Duration::ZERO);
+                
+            table.push_str(&format!(
+                "{:<31} | {:>6} | {:>6} | {:>6} | {:>6} | {:>6}\n",
+                if p.branch.len() > 30 { format!("{}...", &p.branch[..27]) } else { p.branch },
+                p.status_dur.map(|d| d.as_millis()).unwrap_or(0),
+                p.ahead_dur.map(|d| d.as_millis()).unwrap_or(0),
+                p.commit_dur.map(|d| d.as_millis()).unwrap_or(0),
+                p.recent_dur.map(|d| d.as_millis()).unwrap_or(0),
+                total.as_millis()
+            ));
+        }
+        info!("Refresh Performance Summary (ms) - Wall Time: {}ms{}", start_all.elapsed().as_millis(), table);
     });
     
     Ok(worktrees)
