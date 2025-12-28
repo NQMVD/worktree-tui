@@ -1693,6 +1693,8 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(display_idx, &idx)| {
             let wt = &app.worktrees[idx];
+            // get the main worktree too
+            let main_wt = app.worktrees.iter().find(|wt| wt.is_main).unwrap();
 
             let num = if display_idx < 9 {
                 Span::styled(
@@ -1732,15 +1734,23 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(colors::WARNING)
             };
 
+            // make commits in table that are matching the main one highlight in purple
+            let commit_style = if wt.is_main {
+                Style::default().fg(colors::PURPLE)
+            } else {
+                if wt.commit == main_wt.commit {
+                    Style::default().fg(colors::PURPLE)
+                } else {
+                    Style::default().fg(colors::CLAUDE_WARM_GRAY)
+                }
+            };
+
             Row::new(vec![
                 Cell::from(num),
                 Cell::from(icon),
                 Cell::from(Span::styled(branch_name, branch_style)),
                 Cell::from(Span::styled(wt.status.summary(), status_style)),
-                Cell::from(Span::styled(
-                    &wt.commit_short,
-                    Style::default().fg(colors::CLAUDE_WARM_GRAY),
-                )),
+                Cell::from(Span::styled(&wt.commit_short, commit_style)),
             ])
             .height(1)
         })
