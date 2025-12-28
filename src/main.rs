@@ -2885,7 +2885,7 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
     });
 }
 
-/// Fetch all worktree data (runs in blocking thread)
+/// Fetch all worktree data (runs in blocking thread with parallel git commands)
 fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
     let total_start = Instant::now();
     
@@ -2901,20 +2901,59 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
 
     let content = String::from_utf8(output.stdout)?;
     let mut worktrees = App::parse_worktree_list(&content, repo_root, current_path)?;
+    
+    let list_time = total_start.elapsed();
 
-    // Fetch additional status for each worktree
+    // Fetch additional status for each worktree IN PARALLEL
     let start = Instant::now();
-    for worktree in &mut worktrees {
-        if !worktree.is_bare {
-            worktree.status = App::get_worktree_status(&worktree.path);
-            let commit_info = App::get_commit_info(&worktree.path);
-            worktree.commit_message = commit_info.0;
-            worktree.commit_time = commit_info.1;
-            worktree.recent_commits = App::get_recent_commits(&worktree.path, 10);
+    
+    // Use thread::scope for parallel execution without needing Arc
+    std::thread::scope(|s| {
+        let handles: Vec<_> = worktrees
+            .iter()
+            .enumerate()
+            .filter(|(_, wt)| !wt.is_bare)
+            .map(|(i, wt)| {
+                let path = wt.path.clone();
+                s.spawn(move || {
+                    let thread_start = Instant::now();
+                    
+                    let s_start = Instant::now();
+                    let status = App::get_worktree_status(&path);
+                    let s_time = s_start.elapsed();
+                    
+                    let c_start = Instant::now();
+                    let commit_info = App::get_commit_info(&path);
+                    let c_time = c_start.elapsed();
+                    
+                    let r_start = Instant::now();
+                    let recent_commits = App::get_recent_commits(&path, 10);
+                    let r_time = r_start.elapsed();
+                    
+                    let total_time = thread_start.elapsed();
+                    timing_log!("[TIMING] worktree {} thread: {:?} (status={:?}, commit={:?}, recent={:?})", 
+                        i, total_time, s_time, c_time, r_time);
+                        
+                    (path, status, commit_info.0, commit_info.1, recent_commits)
+                })
+            })
+            .collect();
+        
+        // Collect results and update worktrees
+        for handle in handles {
+            if let Ok((path, status, commit_msg, commit_time, recent)) = handle.join() {
+                if let Some(wt) = worktrees.iter_mut().find(|w| w.path == path) {
+                    wt.status = status;
+                    wt.commit_message = commit_msg;
+                    wt.commit_time = commit_time;
+                    wt.recent_commits = recent;
+                }
+            }
         }
-    }
-    timing_log!("[TIMING] background refresh: {:?} ({} worktrees, status fetch={:?})", 
-        total_start.elapsed(), worktrees.len(), start.elapsed());
+    });
+    
+    timing_log!("[TIMING] background refresh total: {:?} (list={:?}, parallel status={:?})", 
+        total_start.elapsed(), list_time, start.elapsed());
 
     Ok(worktrees)
 }
