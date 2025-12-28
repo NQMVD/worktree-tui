@@ -34,9 +34,7 @@ use std::{
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 use tracing::{info, info_span};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-
+use tracing_subscriber::{EnvFilter, fmt::{self}, prelude::*};
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -2732,6 +2730,15 @@ fn truncate_path(path: &PathBuf, max_len: usize) -> String {
 /// Spinner characters for loading indicator
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub struct JustTime;
+
+impl tracing_subscriber::fmt::time::FormatTime for JustTime {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%H:%M:%S"))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -2748,6 +2755,8 @@ async fn main() -> Result<()> {
         .with(fmt::layer()
             .with_writer(non_blocking)
             .with_ansi(false)
+            .compact()
+            .with_timer(JustTime)
             .with_span_events(fmt::format::FmtSpan::CLOSE))
         .init();
 
