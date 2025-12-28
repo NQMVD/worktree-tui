@@ -268,35 +268,17 @@ impl App {
         let _span = info_span!("App::new").entered();
         let repo = Self::find_git_repository()?;
         
-        let path = repo.path().to_path_buf();
-        let common_dir = repo.common_dir().to_path_buf();
-        let work_dir = repo.work_dir().map(|p| p.to_path_buf());
+        // Ensure we have absolute paths from the start
+        let common_dir = dunce::canonicalize(repo.common_dir())
+            .unwrap_or_else(|_| repo.common_dir().to_path_buf());
         
-        info!(
-            ?path,
-            ?common_dir,
-            ?work_dir,
-            "Discovered repository details"
-        );
-
-        // repo_root should be the main worktree's root or the bare repo root
         let repo_root = if repo.is_bare() {
             common_dir.clone()
         } else {
-            // For worktrees, common_dir is usually <main-repo-root>/.git
-            // or <main-repo-root>/.git/worktrees/<name>
-            // We want the main repo root.
-            let mut root = common_dir.clone();
-            if root.ends_with(".git") {
-                root.parent().map(|p| p.to_path_buf()).unwrap_or(root)
-            } else if root.to_string_lossy().contains(".git/worktrees") {
-                // It's a linked worktree's common_dir. 
-                // Actually, common_dir() in gix for a linked worktree SHOULD return the main repo's .git dir.
-                // Let's see what the logs say.
-                root.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or(root)
-            } else {
-                root
-            }
+            // For a non-bare repo, the main worktree is the parent of the .git directory (common_dir)
+            common_dir.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| common_dir.clone())
         };
         
         let repo_name = repo_root
@@ -304,16 +286,16 @@ impl App {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "repository".to_string());
 
-        info!(?repo_root, ?repo_name, "Final repo_root and repo_name");
-
-
-        info!(?repo_root, ?repo_name, "Repository root determined");
+        info!(?repo_root, ?repo_name, "Repository root correctly determined as absolute path");
 
         // Get the current worktree path (where the program was run from)
+        // Ensure it's canonicalized for reliable comparison later
         let current_worktree_path = std::env::current_dir()
             .ok()
             .and_then(|p| dunce::canonicalize(p).ok())
             .unwrap_or_else(|| repo_root.clone());
+
+        info!(?current_worktree_path, "Current worktree path determined");
 
         // Try to load from cache for instant startup
         let (worktrees, loading_state): (Vec<Worktree>, LoadingState) = if let Some(cached) = cache::load_cache(&repo_root) {
@@ -2932,8 +2914,6 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
                 let is_locked = p.lock_reason().is_some();
                 let lock_reason = p.lock_reason().map(|s| s.to_string());
                 
-                info!(?path, ?is_locked, "Processing linked worktree proxy");
-                
                 let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
                 let head = wt_repo.head().context("Failed to get HEAD for worktree")?;
                 let branch = head.referent_name().map(|n| n.shorten().to_string());
@@ -2941,8 +2921,9 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
                 (path, branch, commit, false, is_locked, lock_reason)
             }
             None => {
-                let path = r.work_dir().map(|p| p.to_path_buf()).unwrap_or_else(|| r.common_dir().to_path_buf());
-                info!(?path, "Processing main worktree");
+                let path = r.work_dir()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| r.common_dir().to_path_buf());
                 
                 let head = r.head().context("Failed to get HEAD for main repo")?;
                 let branch = head.referent_name().map(|n| n.shorten().to_string());
@@ -2951,11 +2932,19 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
             }
         };
 
-        let current_dir = std::env::current_dir()?;
-        let is_current = current_dir.starts_with(&path);
+        // Canonicalize both for bulletproof comparison
+        let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canon_current = dunce::canonicalize(_current_path).unwrap_or_else(|_| _current_path.clone());
+        
+        // Match if it's the exact path or if the current dir is inside this worktree
+        let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
+        
+        if is_current {
+            info!(?path, ?_current_path, "Current worktree detected");
+        }
 
         Ok(Worktree {
-            path: path.clone(),
+            path: canon_path,
             branch,
             commit_short: commit.chars().take(7).collect::<String>(),
             commit,
@@ -2988,6 +2977,11 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
     for proxy in worktree_proxies {
         match get_wt_info(Some(proxy), &repo) {
             Ok(wt) => {
+                // De-duplicate: don't add if it's already in the list (e.g. same as main)
+                if worktrees.iter().any(|existing| existing.path == wt.path) {
+                    info!(path = %wt.path.display(), "Skipping duplicate worktree (already added)");
+                    continue;
+                }
                 info!(path = %wt.path.display(), is_main = wt.is_main, "Added linked worktree to list");
                 worktrees.push(wt);
             }
