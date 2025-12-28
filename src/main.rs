@@ -656,22 +656,50 @@ impl App {
             }
         }
 
-        // Ahead/Behind - simplified implementation
+        // Ahead/Behind - compute commits that differ between HEAD and upstream
         if let Ok(head) = repo.head() {
-            if let Some(Ok(remote_ref)) = head
-                .referent_name()
-                .and_then(|name| repo.branch_remote_ref_name(name, gix::remote::Direction::Fetch))
-            {
-                if let Ok(upstream_id) = repo
-                    .find_reference(remote_ref.as_ref())
-                    .and_then(|r| Ok(r.id()))
-                {
-                    if let Some(head_id) = head.id() {
-                        if let Ok(walk) = repo.rev_walk([head_id.detach()]).all() {
-                            status.ahead = walk.count();
-                        }
-                        if let Ok(walk) = repo.rev_walk([upstream_id.detach()]).all() {
-                            status.behind = walk.count();
+            if let Some(branch_name) = head.referent_name() {
+                // Extract the short branch name (e.g., "main" from "refs/heads/main")
+                let short_name = branch_name.shorten();
+                
+                // Look up the remote and merge config for this branch
+                let remote_key = format!("branch.{}.remote", short_name);
+                let merge_key = format!("branch.{}.merge", short_name);
+                
+                let config = repo.config_snapshot();
+                let remote_name = config.string(&remote_key);
+                let merge_ref = config.string(&merge_key);
+                
+                if let (Some(remote), Some(merge)) = (remote_name, merge_ref) {
+                    // merge is like "refs/heads/main", we need "refs/remotes/origin/main"
+                    let remote = remote.to_string();
+                    let merge = merge.to_string();
+                    let upstream_branch = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+                    let upstream_ref = format!("refs/remotes/{}/{}", remote, upstream_branch);
+                    
+                    if let Ok(upstream) = repo.find_reference(&upstream_ref) {
+                        let upstream_id = upstream.id();
+                        if let Some(head_id) = head.id() {
+                            // Collect upstream commits for comparison
+                            let mut upstream_commits = std::collections::HashSet::new();
+                            if let Ok(walk) = repo.rev_walk([upstream_id.detach()]).all() {
+                                for commit in walk.flatten() {
+                                    upstream_commits.insert(commit.id);
+                                }
+                            }
+
+                            // Collect head commits for comparison
+                            let mut head_commits = std::collections::HashSet::new();
+                            if let Ok(walk) = repo.rev_walk([head_id.detach()]).all() {
+                                for commit in walk.flatten() {
+                                    head_commits.insert(commit.id);
+                                }
+                            }
+
+                            // ahead = commits in HEAD that are not in upstream
+                            status.ahead = head_commits.difference(&upstream_commits).count();
+                            // behind = commits in upstream that are not in HEAD
+                            status.behind = upstream_commits.difference(&head_commits).count();
                         }
                     }
                 }
