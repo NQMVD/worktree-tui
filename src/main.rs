@@ -29,23 +29,12 @@ use std::{
     io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
-// Timing log helper - writes to /tmp/wtt-timing.log
-macro_rules! timing_log {
-    ($($arg:tt)*) => {{
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/wtt-timing.log")
-        {
-            let _ = writeln!(file, $($arg)*);
-        }
-    }};
-}
+
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -272,11 +261,7 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
-        let total_start = Instant::now();
-        
-        let start = Instant::now();
         let repo_root = Self::find_git_root()?;
-        timing_log!("[TIMING] find_git_root: {:?}", start.elapsed());
         
         let repo_name = repo_root
             .file_name()
@@ -290,14 +275,9 @@ impl App {
             .unwrap_or_else(|| repo_root.clone());
 
         // Try to load from cache for instant startup
-        let start = Instant::now();
         let (worktrees, loading_state) = if let Some(cached) = cache::load_cache(&repo_root) {
             let is_fresh = cached.is_fresh();
-            let age = cached.age_secs();
-            let count = cached.worktrees.len();
             let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
-            timing_log!("[TIMING] cache load: {:?} ({} worktrees, age={}s, fresh={})", 
-                start.elapsed(), count, age, is_fresh);
             if is_fresh {
                 // Cache is fresh, no need to refresh
                 (worktrees, LoadingState::Idle)
@@ -306,7 +286,6 @@ impl App {
                 (worktrees, LoadingState::Loading)
             }
         } else {
-            timing_log!("[TIMING] cache miss - no cache file found");
             // No cache, need to load
             (Vec::new(), LoadingState::Loading)
         };
@@ -357,8 +336,6 @@ impl App {
             app.table_state.select(Some(0));
         }
 
-        timing_log!("[TIMING] App::new() total: {:?} (loading_state={:?})", 
-            total_start.elapsed(), app.loading_state);
         Ok(app)
     }
 
@@ -2890,8 +2867,6 @@ fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, 
 
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
 fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
-    let total_start = Instant::now();
-    
     let output = Command::new("git")
         .current_dir(repo_root)
         .args(["worktree", "list", "--porcelain"])
@@ -2904,8 +2879,6 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
 
     let content = String::from_utf8(output.stdout)?;
     let mut worktrees = App::parse_worktree_list(&content, repo_root, current_path)?;
-    
-    let list_time = total_start.elapsed();
 
     // Enum to hold different types of git command results safely
     enum GitResult {
@@ -2916,7 +2889,6 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
     }
 
     // Fetch additional status for each worktree IN PARALLEL (All commands for all worktrees)
-    let start = Instant::now();
     
     // Use thread::scope to spawn tasks for every single git command
     std::thread::scope(|s| {
@@ -2929,45 +2901,25 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
             // 1. Status Porcelain Task
             let p1 = path.clone();
             task_handles.push(s.spawn(move || {
-                let s_t = Instant::now();
-                let res = App::get_worktree_status_porcelain(&p1);
-                let dur = s_t.elapsed();
-                timing_log!("[THREAD] WT {} status: {:?} (started @ +{}ms)", 
-                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
-                GitResult::StatusPorcelain(i, res)
+                GitResult::StatusPorcelain(i, App::get_worktree_status_porcelain(&p1))
             }));
             
             // 2. Ahead/Behind Task
             let p2 = path.clone();
             task_handles.push(s.spawn(move || {
-                let s_t = Instant::now();
-                let res = App::get_worktree_ahead_behind(&p2);
-                let dur = s_t.elapsed();
-                timing_log!("[THREAD] WT {} ab: {:?} (started @ +{}ms)", 
-                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
-                GitResult::AheadBehind(i, res)
+                GitResult::AheadBehind(i, App::get_worktree_ahead_behind(&p2))
             }));
             
             // 3. Commit Info Task
             let p3 = path.clone();
             task_handles.push(s.spawn(move || {
-                let s_t = Instant::now();
-                let res = App::get_commit_info(&p3);
-                let dur = s_t.elapsed();
-                timing_log!("[THREAD] WT {} commit: {:?} (started @ +{}ms)", 
-                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
-                GitResult::Commit(i, res)
+                GitResult::Commit(i, App::get_commit_info(&p3))
             }));
             
             // 4. Recent Commits Task
             let p4 = path.clone();
             task_handles.push(s.spawn(move || {
-                let s_t = Instant::now();
-                let res = App::get_recent_commits(&p4, 10);
-                let dur = s_t.elapsed();
-                timing_log!("[THREAD] WT {} recent: {:?} (started @ +{}ms)", 
-                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
-                GitResult::Recent(i, res)
+                GitResult::Recent(i, App::get_recent_commits(&p4, 10))
             }));
         }
         
@@ -2996,9 +2948,6 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
         }
     });
     
-    timing_log!("[TIMING] background refresh total: {:?} (list={:?}, parallel fetch={:?})", 
-        total_start.elapsed(), list_time, start.elapsed());
-
     Ok(worktrees)
 }
 
