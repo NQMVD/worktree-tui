@@ -6,8 +6,8 @@ mod cache;
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
-        MouseEventKind, EventStream,
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -32,9 +32,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use unicode_width::UnicodeWidthStr;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, fmt::{self}, prelude::*};
+use tracing_subscriber::{
+    fmt::{self},
+    prelude::*,
+    EnvFilter,
+};
+use unicode_width::UnicodeWidthStr;
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -262,7 +266,7 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let repo_root = Self::find_git_root()?;
-        
+
         let repo_name = repo_root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -277,12 +281,16 @@ impl App {
         // Try to load from cache for instant startup
         let (worktrees, loading_state) = if let Some(cached) = cache::load_cache(&repo_root) {
             let is_fresh = cached.is_fresh();
-            let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
+            let worktrees =
+                Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
             if is_fresh {
                 info!(count = worktrees.len(), "Cache hit (fresh)");
                 (worktrees, LoadingState::Idle)
             } else {
-                info!(count = worktrees.len(), "Cache hit (stale), triggering background refresh");
+                info!(
+                    count = worktrees.len(),
+                    "Cache hit (stale), triggering background refresh"
+                );
                 (worktrees, LoadingState::Loading)
             }
         } else {
@@ -448,7 +456,7 @@ impl App {
         // e.g., /path/to/repo/.git
         // The main repo path is just the parent of .git
         let git_path = PathBuf::from(&common_dir);
-        
+
         let main_repo_path = if common_dir.ends_with(".git") {
             // Standard case: strip the .git suffix to get repo root
             git_path.parent().unwrap_or(&git_path).to_path_buf()
@@ -479,7 +487,8 @@ impl App {
         }
 
         let content = String::from_utf8(output.stdout)?;
-        self.worktrees = Self::parse_worktree_list(&content, &self.repo_root, &self.current_worktree_path)?;
+        self.worktrees =
+            Self::parse_worktree_list(&content, &self.repo_root, &self.current_worktree_path)?;
         self.last_refresh = Instant::now();
 
         // Fetch additional status for each worktree
@@ -511,7 +520,7 @@ impl App {
 
         // Save to cache
         self.save_to_cache();
-        
+
         self.loading_state = LoadingState::Idle;
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
@@ -557,7 +566,11 @@ impl App {
         }
     }
 
-    fn parse_worktree_list(content: &str, repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
+    fn parse_worktree_list(
+        content: &str,
+        repo_root: &PathBuf,
+        current_path: &PathBuf,
+    ) -> Result<Vec<Worktree>> {
         let mut worktrees = Vec::new();
         let mut current: Option<Worktree> = None;
 
@@ -651,12 +664,20 @@ impl App {
                         }
                         continue;
                     }
-                    if line.len() < 2 { continue; }
+                    if line.len() < 2 {
+                        continue;
+                    }
                     let index = line.chars().next().unwrap();
                     let worktree = line.chars().nth(1).unwrap();
-                    if index != ' ' && index != '?' { staged += 1; }
-                    if worktree == 'M' || worktree == 'D' { modified += 1; }
-                    if index == '?' { untracked += 1; }
+                    if index != ' ' && index != '?' {
+                        staged += 1;
+                    }
+                    if worktree == 'M' || worktree == 'D' {
+                        modified += 1;
+                    }
+                    if index == '?' {
+                        untracked += 1;
+                    }
                 }
             }
         }
@@ -1314,7 +1335,6 @@ impl App {
 // Event Handling
 // ============================================================================
 
-
 fn handle_mouse_event(app: &mut App, mouse: crossterm::event::MouseEvent) -> Result<()> {
     if app.mode != AppMode::Normal {
         return Ok(());
@@ -1818,7 +1838,7 @@ fn render_worktree_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let icon = if wt.is_current {
                 // Highlight the worktree we're currently in
-                Span::styled("*", Style::default().fg(colors::CLAUDE_CREAM)) // other ones: ○ 
+                Span::styled("*", Style::default().fg(colors::CLAUDE_CREAM)) // other ones: ○
             } else if wt.is_main {
                 Span::styled("", Style::default().fg(colors::CLAUDE_ORANGE))
             } else if wt.is_locked {
@@ -2170,7 +2190,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     // Build right side content: spinner (if loading) + status message
     let mut right_spans: Vec<Span> = Vec::new();
-    
+
     // Add spinner if loading
     if app.loading_state == LoadingState::Loading {
         let spinner_char = SPINNER_FRAMES[app.spinner_frame];
@@ -2189,7 +2209,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         };
         right_spans.push(Span::styled(&msg.text, Style::default().fg(color)));
     }
-    
+
     if !right_spans.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
@@ -2723,19 +2743,21 @@ async fn main() -> Result<()> {
         .append(true)
         .open("/tmp/wtt.log")
         .expect("Failed to open log file");
-        
+
     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
-    
+
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with(fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .compact()
-            .with_target(false)
-            .with_file(false)
-            .with_line_number(false)
-            .with_timer(JustTime))
+        .with(
+            fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .compact()
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false)
+                .with_timer(JustTime),
+        )
         .init();
 
     info!("Starting worktree-tui");
@@ -2794,25 +2816,32 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<Option<PathBuf>> {
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+) -> Result<Option<PathBuf>> {
     // Create channel for background refresh updates
     let (tx, mut rx) = mpsc::unbounded_channel::<AppUpdate>();
-    
+
     // If we need to load/refresh, spawn background task
     if app.loading_state == LoadingState::Loading {
-        spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+        spawn_refresh_task(
+            tx.clone(),
+            app.repo_root.clone(),
+            app.current_worktree_path.clone(),
+        );
     }
-    
+
     // Create async event stream
     let mut event_stream = EventStream::new();
-    
+
     // Spinner tick interval (100ms for smooth animation)
     let mut spinner_interval = tokio::time::interval(Duration::from_millis(100));
-    
+
     loop {
         // Render
         terminal.draw(|f| ui(f, app))?;
-        
+
         // Async event handling with tokio::select!
         tokio::select! {
             // Handle keyboard/mouse events
@@ -2823,7 +2852,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                     }
                 }
             }
-            
+
             // Handle background refresh updates
             Some(update) = rx.recv() => {
                 match update {
@@ -2834,7 +2863,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                         app.filtered_indices = (0..app.worktrees.len()).collect();
                         app.loading_state = LoadingState::Idle;
                         app.save_to_cache();
-                        
+
                         // Restore selection
                         if let Some(idx) = selected {
                             if idx < app.filtered_indices.len() {
@@ -2845,12 +2874,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                         } else if !app.filtered_indices.is_empty() {
                             app.table_state.select(Some(0));
                         }
-                        
+
                         app.set_status("Refreshed from background", MessageLevel::Success);
                     }
                 }
             }
-            
+
             // Spinner animation tick
             _ = spinner_interval.tick() => {
                 if app.loading_state == LoadingState::Loading {
@@ -2863,13 +2892,17 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 }
 
 /// Spawn a background task to refresh worktree data
-fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, current_path: PathBuf) {
+fn spawn_refresh_task(
+    tx: mpsc::UnboundedSender<AppUpdate>,
+    repo_root: PathBuf,
+    current_path: PathBuf,
+) {
     tokio::spawn(async move {
         // Run blocking git commands in a blocking task
-        let result = tokio::task::spawn_blocking(move || {
-            fetch_all_worktrees(&repo_root, &current_path)
-        }).await;
-        
+        let result =
+            tokio::task::spawn_blocking(move || fetch_all_worktrees(&repo_root, &current_path))
+                .await;
+
         if let Ok(Ok(worktrees)) = result {
             let _ = tx.send(AppUpdate::WorktreesLoaded(worktrees));
         }
@@ -2905,15 +2938,17 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
     }
 
     // Fetch additional status for each worktree IN PARALLEL (All commands for all worktrees)
-    
+
     // Use thread::scope to spawn tasks for every single git command
     std::thread::scope(|s| {
         let mut task_handles = Vec::new();
-        
+
         for (i, wt) in worktrees.iter().enumerate() {
-            if wt.is_bare { continue; }
+            if wt.is_bare {
+                continue;
+            }
             let path = wt.path.clone();
-            
+
             // 1. Full Status Task (Porcelain + Ahead/Behind)
             let p1 = path.clone();
             task_handles.push(s.spawn(move || {
@@ -2921,7 +2956,7 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
                 let res = App::get_worktree_status(&p1);
                 GitResult::Status(i, res, start.elapsed())
             }));
-            
+
             // 2. Log Task (Current Commit + Recent History)
             let p2 = path.clone();
             task_handles.push(s.spawn(move || {
@@ -2930,12 +2965,15 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
                 GitResult::Log(i, res, start.elapsed())
             }));
         }
-        
-        let mut perf_stats: Vec<PerfEntry> = worktrees.iter().map(|wt| PerfEntry {
-            branch: wt.branch.clone().unwrap_or_else(|| "bare".to_string()),
-            status_dur: None,
-            log_dur: None,
-        }).collect();
+
+        let mut perf_stats: Vec<PerfEntry> = worktrees
+            .iter()
+            .map(|wt| PerfEntry {
+                branch: wt.branch.clone().unwrap_or_else(|| "bare".to_string()),
+                status_dur: None,
+                log_dur: None,
+            })
+            .collect();
 
         // Collect results as they finish and update worktrees
         for handle in task_handles {
@@ -2963,29 +3001,39 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
         let mut table = String::from("\nRefresh Performance Summary (ms):\n");
         table.push_str("Branch                          | Status | Log    | Total\n");
         table.push_str("--------------------------------|--------|--------|-------\n");
-        
+
         for p in perf_stats {
-            let total = p.status_dur.unwrap_or(Duration::ZERO)
-                + p.log_dur.unwrap_or(Duration::ZERO);
-                
+            let total =
+                p.status_dur.unwrap_or(Duration::ZERO) + p.log_dur.unwrap_or(Duration::ZERO);
+
             table.push_str(&format!(
                 "{:<31} | {:>6} | {:>6} | {:>6}\n",
-                if p.branch.len() > 30 { format!("{}...", &p.branch[..27]) } else { p.branch },
+                if p.branch.len() > 30 {
+                    format!("{}...", &p.branch[..27])
+                } else {
+                    p.branch
+                },
                 p.status_dur.map(|d| d.as_millis()).unwrap_or(0),
                 p.log_dur.map(|d| d.as_millis()).unwrap_or(0),
                 total.as_millis()
             ));
         }
-        info!("Refresh Performance Summary (ms) - Wall Time: {}ms{}", start_all.elapsed().as_millis(), table);
+        info!(
+            "Refresh Performance Summary (ms) - Wall Time: {}ms{}",
+            start_all.elapsed().as_millis(),
+            table
+        );
     });
-    
+
     Ok(worktrees)
 }
 
-
-
 /// Handle a single event, return true if should quit
-fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdate>) -> Result<bool> {
+fn handle_event(
+    app: &mut App,
+    event: Event,
+    tx: &mpsc::UnboundedSender<AppUpdate>,
+) -> Result<bool> {
     match event {
         Event::Key(key) => match app.mode {
             AppMode::Normal => handle_normal_mode_async(app, key.code, key.modifiers, tx)?,
@@ -3007,22 +3055,26 @@ fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdat
 
 /// Handle normal mode with async refresh capability
 fn handle_normal_mode_async(
-    app: &mut App, 
-    key: KeyCode, 
+    app: &mut App,
+    key: KeyCode,
     modifiers: KeyModifiers,
-    tx: &mpsc::UnboundedSender<AppUpdate>
+    tx: &mpsc::UnboundedSender<AppUpdate>,
 ) -> Result<()> {
     match key {
         // Refresh triggers background task instead of blocking
         KeyCode::Char('r') | KeyCode::Char('R') => {
             if app.loading_state != LoadingState::Loading {
                 app.loading_state = LoadingState::Loading;
-                spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+                spawn_refresh_task(
+                    tx.clone(),
+                    app.repo_root.clone(),
+                    app.current_worktree_path.clone(),
+                );
                 app.set_status("Refreshing...", MessageLevel::Info);
             }
         }
         // All other keys handled by existing function
-        _ => handle_normal_mode(app, key, modifiers)?
+        _ => handle_normal_mode(app, key, modifiers)?,
     }
     Ok(())
 }
