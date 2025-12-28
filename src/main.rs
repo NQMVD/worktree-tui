@@ -29,7 +29,7 @@ use std::{
     io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
@@ -508,7 +508,14 @@ impl App {
         // Fetch additional status for each worktree
         for worktree in &mut self.worktrees {
             if !worktree.is_bare {
-                worktree.status = Self::get_worktree_status(&worktree.path);
+                let porcelain = Self::get_worktree_status_porcelain(&worktree.path);
+                let ab = Self::get_worktree_ahead_behind(&worktree.path);
+                worktree.status.staged = porcelain.0;
+                worktree.status.modified = porcelain.1;
+                worktree.status.untracked = porcelain.2;
+                worktree.status.ahead = ab.0;
+                worktree.status.behind = ab.1;
+
                 let commit_info = Self::get_commit_info(&worktree.path);
                 worktree.commit_message = commit_info.0;
                 worktree.commit_time = commit_info.1;
@@ -638,8 +645,10 @@ impl App {
         Ok(worktrees)
     }
 
-    fn get_worktree_status(path: &PathBuf) -> WorktreeStatus {
-        let mut status = WorktreeStatus::default();
+    fn get_worktree_status_porcelain(path: &PathBuf) -> (usize, usize, usize) {
+        let mut staged = 0;
+        let mut modified = 0;
+        let mut untracked = 0;
 
         if let Ok(output) = Command::new("git")
             .current_dir(path)
@@ -649,25 +658,19 @@ impl App {
             if output.status.success() {
                 let content = String::from_utf8_lossy(&output.stdout);
                 for line in content.lines() {
-                    if line.len() < 2 {
-                        continue;
-                    }
+                    if line.len() < 2 { continue; }
                     let index = line.chars().next().unwrap();
                     let worktree = line.chars().nth(1).unwrap();
-
-                    if index != ' ' && index != '?' {
-                        status.staged += 1;
-                    }
-                    if worktree == 'M' || worktree == 'D' {
-                        status.modified += 1;
-                    }
-                    if index == '?' {
-                        status.untracked += 1;
-                    }
+                    if index != ' ' && index != '?' { staged += 1; }
+                    if worktree == 'M' || worktree == 'D' { modified += 1; }
+                    if index == '?' { untracked += 1; }
                 }
             }
         }
+        (staged, modified, untracked)
+    }
 
+    fn get_worktree_ahead_behind(path: &PathBuf) -> (usize, usize) {
         if let Ok(output) = Command::new("git")
             .current_dir(path)
             .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
@@ -677,13 +680,13 @@ impl App {
                 let content = String::from_utf8_lossy(&output.stdout);
                 let parts: Vec<&str> = content.trim().split('\t').collect();
                 if parts.len() == 2 {
-                    status.ahead = parts[0].parse().unwrap_or(0);
-                    status.behind = parts[1].parse().unwrap_or(0);
+                    let ahead = parts[0].parse().unwrap_or(0);
+                    let behind = parts[1].parse().unwrap_or(0);
+                    return (ahead, behind);
                 }
             }
         }
-
-        status
+        (0, 0)
     }
 
     fn get_commit_info(path: &PathBuf) -> (String, Option<i64>) {
@@ -2904,59 +2907,102 @@ fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Ve
     
     let list_time = total_start.elapsed();
 
-    // Fetch additional status for each worktree IN PARALLEL
+    // Enum to hold different types of git command results safely
+    enum GitResult {
+        StatusPorcelain(usize, (usize, usize, usize)), // staged, modified, untracked
+        AheadBehind(usize, (usize, usize)),           // ahead, behind
+        Commit(usize, (String, Option<i64>)),
+        Recent(usize, Vec<CommitInfo>),
+    }
+
+    // Fetch additional status for each worktree IN PARALLEL (All commands for all worktrees)
     let start = Instant::now();
     
-    // Use thread::scope for parallel execution without needing Arc
+    // Use thread::scope to spawn tasks for every single git command
     std::thread::scope(|s| {
-        let handles: Vec<_> = worktrees
-            .iter()
-            .enumerate()
-            .filter(|(_, wt)| !wt.is_bare)
-            .map(|(i, wt)| {
-                let path = wt.path.clone();
-                s.spawn(move || {
-                    let thread_start = Instant::now();
-                    
-                    let s_start = Instant::now();
-                    let status = App::get_worktree_status(&path);
-                    let s_time = s_start.elapsed();
-                    
-                    let c_start = Instant::now();
-                    let commit_info = App::get_commit_info(&path);
-                    let c_time = c_start.elapsed();
-                    
-                    let r_start = Instant::now();
-                    let recent_commits = App::get_recent_commits(&path, 10);
-                    let r_time = r_start.elapsed();
-                    
-                    let total_time = thread_start.elapsed();
-                    timing_log!("[TIMING] worktree {} thread: {:?} (status={:?}, commit={:?}, recent={:?})", 
-                        i, total_time, s_time, c_time, r_time);
-                        
-                    (path, status, commit_info.0, commit_info.1, recent_commits)
-                })
-            })
-            .collect();
+        let mut task_handles = Vec::new();
         
-        // Collect results and update worktrees
-        for handle in handles {
-            if let Ok((path, status, commit_msg, commit_time, recent)) = handle.join() {
-                if let Some(wt) = worktrees.iter_mut().find(|w| w.path == path) {
-                    wt.status = status;
-                    wt.commit_message = commit_msg;
-                    wt.commit_time = commit_time;
-                    wt.recent_commits = recent;
+        for (i, wt) in worktrees.iter().enumerate() {
+            if wt.is_bare { continue; }
+            let path = wt.path.clone();
+            
+            // 1. Status Porcelain Task
+            let p1 = path.clone();
+            task_handles.push(s.spawn(move || {
+                let s_t = Instant::now();
+                let res = App::get_worktree_status_porcelain(&p1);
+                let dur = s_t.elapsed();
+                timing_log!("[THREAD] WT {} status: {:?} (started @ +{}ms)", 
+                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
+                GitResult::StatusPorcelain(i, res)
+            }));
+            
+            // 2. Ahead/Behind Task
+            let p2 = path.clone();
+            task_handles.push(s.spawn(move || {
+                let s_t = Instant::now();
+                let res = App::get_worktree_ahead_behind(&p2);
+                let dur = s_t.elapsed();
+                timing_log!("[THREAD] WT {} ab: {:?} (started @ +{}ms)", 
+                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
+                GitResult::AheadBehind(i, res)
+            }));
+            
+            // 3. Commit Info Task
+            let p3 = path.clone();
+            task_handles.push(s.spawn(move || {
+                let s_t = Instant::now();
+                let res = App::get_commit_info(&p3);
+                let dur = s_t.elapsed();
+                timing_log!("[THREAD] WT {} commit: {:?} (started @ +{}ms)", 
+                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
+                GitResult::Commit(i, res)
+            }));
+            
+            // 4. Recent Commits Task
+            let p4 = path.clone();
+            task_handles.push(s.spawn(move || {
+                let s_t = Instant::now();
+                let res = App::get_recent_commits(&p4, 10);
+                let dur = s_t.elapsed();
+                timing_log!("[THREAD] WT {} recent: {:?} (started @ +{}ms)", 
+                    i, dur, Instant::now().duration_since(start).as_millis() - dur.as_millis());
+                GitResult::Recent(i, res)
+            }));
+        }
+        
+        // Collect results as they finish and update worktrees
+        for handle in task_handles {
+            if let Ok(res) = handle.join() {
+                match res {
+                    GitResult::StatusPorcelain(idx, (staged, modded, untracked)) => {
+                        worktrees[idx].status.staged = staged;
+                        worktrees[idx].status.modified = modded;
+                        worktrees[idx].status.untracked = untracked;
+                    }
+                    GitResult::AheadBehind(idx, (ahead, behind)) => {
+                        worktrees[idx].status.ahead = ahead;
+                        worktrees[idx].status.behind = behind;
+                    }
+                    GitResult::Commit(idx, (msg, time)) => {
+                        worktrees[idx].commit_message = msg;
+                        worktrees[idx].commit_time = time;
+                    }
+                    GitResult::Recent(idx, commits) => {
+                        worktrees[idx].recent_commits = commits;
+                    }
                 }
             }
         }
     });
     
-    timing_log!("[TIMING] background refresh total: {:?} (list={:?}, parallel status={:?})", 
+    timing_log!("[TIMING] background refresh total: {:?} (list={:?}, parallel fetch={:?})", 
         total_start.elapsed(), list_time, start.elapsed());
 
     Ok(worktrees)
 }
+
+
 
 /// Handle a single event, return true if should quit
 fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdate>) -> Result<bool> {
