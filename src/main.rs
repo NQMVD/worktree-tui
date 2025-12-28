@@ -472,19 +472,73 @@ impl App {
         Ok(repo)
     }
 
+
     fn refresh_worktrees(&mut self) -> Result<()> {
         let _span = info_span!("refresh_worktrees").entered();
         info!("Synchronous worktree refresh started");
 
-        let worktree_proxies = self.repo.worktrees().context("Failed to list worktrees")?;
+        // Always use the main repo root for listing
+        let repo = gix::open(&self.repo_root).context("Failed to open main repository")?;
+        let worktree_proxies = repo.worktrees().context("Failed to list worktrees")?;
         let mut worktrees = Vec::new();
 
+        // Helper to create Worktree struct (shares logic with fetch_all_worktrees)
+        let get_wt_info = |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
+            let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
+                Some(p) => {
+                    let path = p.base()?.to_path_buf();
+                    let is_locked = p.lock_reason().is_some();
+                    let lock_reason = p.lock_reason().map(|s| s.to_string());
+                    let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
+                    let head = wt_repo.head().context("Failed to get HEAD")?;
+                    let branch = head.referent_name().map(|n| n.shorten().to_string());
+                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                    (path, branch, commit, false, is_locked, lock_reason)
+                }
+                None => {
+                    let path = r.workdir()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| r.common_dir().to_path_buf());
+                    let head = r.head().context("Failed to get HEAD")?;
+                    let branch = head.referent_name().map(|n| n.shorten().to_string());
+                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                    (path, branch, commit, true, false, None)
+                }
+            };
+
+            let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let canon_current = dunce::canonicalize(&self.current_worktree_path).unwrap_or_else(|_| self.current_worktree_path.clone());
+            let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
+
+            Ok(Worktree {
+                path: canon_path,
+                branch,
+                commit_short: commit.chars().take(7).collect::<String>(),
+                commit,
+                commit_message: String::new(),
+                commit_time: None,
+                is_main,
+                is_current,
+                is_bare: r.is_bare() && is_main,
+                is_detached: false,
+                is_locked,
+                lock_reason,
+                is_prunable: !path.exists(),
+                status: WorktreeStatus::default(),
+                recent_commits: Vec::new(),
+            })
+        };
+
         // Add main worktree
-        worktrees.push(self.create_worktree_info(None)?);
+        worktrees.push(get_wt_info(None, &repo)?);
 
         // Add linked worktrees
         for proxy in worktree_proxies {
-            worktrees.push(self.create_worktree_info(Some(proxy))?);
+            let wt = get_wt_info(Some(proxy), &repo)?;
+            // De-duplicate
+            if !worktrees.iter().any(|existing| existing.path == wt.path) {
+                worktrees.push(wt);
+            }
         }
 
         self.worktrees = worktrees;
@@ -492,15 +546,14 @@ impl App {
 
         // Fetch additional status for each worktree
         for worktree in &mut self.worktrees {
-            if !worktree.is_bare {
-                let repo = gix::open(&worktree.path).context("Failed to open worktree repo")?;
-                let status = Self::get_gix_status(&repo)?;
-                worktree.status = status;
-
-                let commit_info = Self::get_gix_commit_info(&repo)?;
-                worktree.commit_message = commit_info.0;
-                worktree.commit_time = commit_info.1;
-                worktree.recent_commits = Self::get_gix_recent_commits(&repo, 10)?;
+            if !worktree.is_bare && !worktree.is_prunable {
+                if let Ok(repo) = gix::open(&worktree.path) {
+                    worktree.status = Self::get_gix_status(&repo).unwrap_or_default();
+                    let commit_info = Self::get_gix_commit_info(&repo).unwrap_or_else(|_| (String::new(), None));
+                    worktree.commit_message = commit_info.0;
+                    worktree.commit_time = commit_info.1;
+                    worktree.recent_commits = Self::get_gix_recent_commits(&repo, 10).unwrap_or_default();
+                }
             }
         }
 
@@ -520,56 +573,6 @@ impl App {
         self.loading_state = LoadingState::Idle;
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
-    }
-
-    fn create_worktree_info(&self, proxy: Option<gix::worktree::Proxy<'_>>) -> Result<Worktree> {
-        let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
-            Some(p) => {
-                let path = p.base()?.to_path_buf();
-                let is_locked = p.lock_reason().is_some();
-                let lock_reason = p.lock_reason().map(|s| s.to_string());
-                // To get branch and commit, we need to open the repo at that path or use the proxy
-                let wt_repo = p
-                    .into_repo()
-                    .context("Failed to open worktree repo from proxy")?;
-                let head = wt_repo.head().context("Failed to get HEAD")?;
-                let branch = head.referent_name().map(|n| n.shorten().to_string());
-                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                (path, branch, commit, false, is_locked, lock_reason)
-            }
-            None => {
-                let path = self
-                    .repo
-                    .work_dir()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| self.repo.common_dir().to_path_buf());
-                let head = self.repo.head().context("Failed to get HEAD")?;
-                let branch = head.referent_name().map(|n| n.shorten().to_string());
-                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                (path, branch, commit, true, false, None)
-            }
-        };
-
-        let current_dir = std::env::current_dir()?;
-        let is_current = current_dir.starts_with(&path);
-
-        Ok(Worktree {
-            path: path.clone(),
-            branch,
-            commit_short: commit.chars().take(7).collect::<String>(),
-            commit,
-            commit_message: String::new(),
-            commit_time: None,
-            is_main,
-            is_current,
-            is_bare: self.repo.is_bare() && is_main,
-            is_detached: false, // Will be set by head info if needed
-            is_locked,
-            lock_reason,
-            is_prunable: !path.exists(),
-            status: WorktreeStatus::default(),
-            recent_commits: Vec::new(),
-        })
     }
 
     fn apply_sort(&mut self) {
@@ -2934,94 +2937,65 @@ fn handle_normal_mode_async(
     Ok(())
 }
 /// Fetch all worktree data (runs in blocking thread with parallel git commands)
-fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<Vec<Worktree>> {
+fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
     let _span = info_span!("fetch_all_worktrees").entered();
     info!(repo_root = %repo_root.display(), "Starting fetch_all_worktrees");
 
-    let repo = match gix::open(repo_root) {
-        Ok(r) => {
-            info!(path = ?r.path(), "Successfully opened repository at repo_root");
-            r
-        }
-        Err(e) => {
-            info!(error = ?e, "FAILED to open repository at repo_root");
-            return Err(e.into());
-        }
-    };
-
-    let worktree_proxies = match repo.worktrees() {
-        Ok(wp) => {
-            info!(count = wp.len(), "Worktree proxies retrieved");
-            wp
-        }
-        Err(e) => {
-            info!(error = ?e, "FAILED to retrieve worktree proxies");
-            return Err(e.into());
-        }
-    };
+    let repo = gix::open(repo_root).context("Failed to open repository at repo_root")?;
+    let worktree_proxies = repo.worktrees().context("Failed to list worktrees")?;
 
     let mut worktrees = Vec::new();
 
     // Helper to create Worktree struct
-    let get_wt_info =
-        |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
-            let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
-                Some(p) => {
-                    let path = p.base()?.to_path_buf();
-                    let is_locked = p.lock_reason().is_some();
-                    let lock_reason = p.lock_reason().map(|s| s.to_string());
+    let get_wt_info = |proxy: Option<gix::worktree::Proxy<'_>>, r: &gix::Repository| -> Result<Worktree> {
+        let (path, branch, commit, is_main, is_locked, lock_reason) = match proxy {
+            Some(p) => {
+                let path = p.base()?.to_path_buf();
+                let is_locked = p.lock_reason().is_some();
+                let lock_reason = p.lock_reason().map(|s| s.to_string());
 
-                    let wt_repo = p
-                        .into_repo()
-                        .context("Failed to open worktree repo from proxy")?;
-                    let head = wt_repo.head().context("Failed to get HEAD for worktree")?;
-                    let branch = head.referent_name().map(|n| n.shorten().to_string());
-                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                    (path, branch, commit, false, is_locked, lock_reason)
-                }
-                None => {
-                    let path = r
-                        .work_dir()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| r.common_dir().to_path_buf());
-
-                    let head = r.head().context("Failed to get HEAD for main repo")?;
-                    let branch = head.referent_name().map(|n| n.shorten().to_string());
-                    let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
-                    (path, branch, commit, true, false, None)
-                }
-            };
-
-            // Canonicalize both for bulletproof comparison
-            let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            let canon_current =
-                dunce::canonicalize(_current_path).unwrap_or_else(|_| _current_path.clone());
-
-            // Match if it's the exact path or if the current dir is inside this worktree
-            let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
-
-            if is_current {
-                info!(?path, ?_current_path, "Current worktree detected");
+                let wt_repo = p.into_repo().context("Failed to open worktree repo from proxy")?;
+                let head = wt_repo.head().context("Failed to get HEAD for worktree")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, false, is_locked, lock_reason)
             }
+            None => {
+                let path = r
+                    .workdir()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| r.common_dir().to_path_buf());
 
-            Ok(Worktree {
-                path: canon_path,
-                branch,
-                commit_short: commit.chars().take(7).collect::<String>(),
-                commit,
-                commit_message: String::new(),
-                commit_time: None,
-                is_main,
-                is_current,
-                is_bare: r.is_bare() && is_main,
-                is_detached: false,
-                is_locked,
-                lock_reason,
-                is_prunable: !path.exists(),
-                status: WorktreeStatus::default(),
-                recent_commits: Vec::new(),
-            })
+                let head = r.head().context("Failed to get HEAD for main repo")?;
+                let branch = head.referent_name().map(|n| n.shorten().to_string());
+                let commit = head.id().map(|id| id.to_string()).unwrap_or_default();
+                (path, branch, commit, true, false, None)
+            }
         };
+
+        // Reliable comparison using canonicalized paths
+        let canon_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canon_current = dunce::canonicalize(current_path).unwrap_or_else(|_| current_path.clone());
+        let is_current = canon_current == canon_path || canon_current.starts_with(&canon_path);
+
+        Ok(Worktree {
+            path: canon_path,
+            branch,
+            commit_short: commit.chars().take(7).collect::<String>(),
+            commit,
+            commit_message: String::new(),
+            commit_time: None,
+            is_main,
+            is_current,
+            is_bare: r.is_bare() && is_main,
+            is_detached: false,
+            is_locked,
+            lock_reason,
+            is_prunable: !path.exists(),
+            status: WorktreeStatus::default(),
+            recent_commits: Vec::new(),
+        })
+    };
 
     // Add main worktree
     match get_wt_info(None, &repo) {
@@ -3052,10 +3026,7 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
         }
     }
 
-    info!(
-        count = worktrees.len(),
-        "Worktree base list completed, starting detail fetch in parallel"
-    );
+    info!(count = worktrees.len(), "Worktree base list completed, starting detail fetch in parallel");
 
     // Fetch additional status for each worktree IN PARALLEL
     std::thread::scope(|s| {
@@ -3069,8 +3040,7 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
             let path = wt.path.clone();
 
             task_handles.push(s.spawn(move || {
-                let _span =
-                    info_span!("fetch_wt_details", wt_idx = i, path = %path.display()).entered();
+                let _span = info_span!("fetch_wt_details", wt_idx = i, path = %path.display()).entered();
                 match gix::open(&path) {
                     Ok(repo) => {
                         let status = App::get_gix_status(&repo).unwrap_or_else(|e| {
@@ -3081,21 +3051,15 @@ fn fetch_all_worktrees(repo_root: &PathBuf, _current_path: &PathBuf) -> Result<V
                             info!(error = ?e, "Commit info fetch failed for worktree");
                             (String::new(), None)
                         });
-                        let recent_commits =
-                            App::get_gix_recent_commits(&repo, 10).unwrap_or_else(|e| {
-                                info!(error = ?e, "Recent commits fetch failed for worktree");
-                                Vec::new()
-                            });
+                        let recent_commits = App::get_gix_recent_commits(&repo, 10).unwrap_or_else(|e| {
+                            info!(error = ?e, "Recent commits fetch failed for worktree");
+                            Vec::new()
+                        });
                         (i, status, commit_info, recent_commits)
                     }
                     Err(e) => {
                         info!(error = ?e, "Failed to open repo at worktree path for details");
-                        (
-                            i,
-                            WorktreeStatus::default(),
-                            (String::new(), None),
-                            Vec::new(),
-                        )
+                        (i, WorktreeStatus::default(), (String::new(), None), Vec::new())
                     }
                 }
             }));
