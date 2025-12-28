@@ -1,15 +1,18 @@
 //! Git Worktree TUI - A beautiful terminal interface for managing Git worktrees
 //! Designed with Claude's visual aesthetic: warm tones, clean typography, intuitive interactions
 
+mod cache;
+
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
-        MouseEventKind,
+        DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEventKind, EventStream,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -22,26 +25,15 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
 };
+use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
-// Timing log helper - writes to /tmp/wtt-timing.log
-macro_rules! timing_log {
-    ($($arg:tt)*) => {{
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/wtt-timing.log")
-        {
-            let _ = writeln!(file, $($arg)*);
-        }
-    }};
-}
 
 // ============================================================================
 // Claude Design System - Warm, approachable colors inspired by Claude's aesthetic
@@ -204,6 +196,19 @@ impl SortOrder {
 // Application State
 // ============================================================================
 
+/// Loading state for async background refresh
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadingState {
+    Idle,
+    Loading,
+}
+
+/// Message sent from background refresh task
+#[derive(Debug)]
+enum AppUpdate {
+    WorktreesLoaded(Vec<Worktree>),
+}
+
 struct App {
     // Core state
     worktrees: Vec<Worktree>,
@@ -221,6 +226,10 @@ struct App {
     status_message: Option<StatusMessage>,
     sort_order: SortOrder,
     show_recent_commits: bool,
+
+    // Loading state for async refresh
+    loading_state: LoadingState,
+    spinner_frame: usize,
 
     // Create dialog
     create_input: String,
@@ -251,11 +260,7 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
-        let total_start = Instant::now();
-        
-        let start = Instant::now();
         let repo_root = Self::find_git_root()?;
-        timing_log!("[TIMING] find_git_root: {:?}", start.elapsed());
         
         let repo_name = repo_root
             .file_name()
@@ -268,8 +273,24 @@ impl App {
             .and_then(|p| dunce::canonicalize(p).ok())
             .unwrap_or_else(|| repo_root.clone());
 
+        // Try to load from cache for instant startup
+        let (worktrees, loading_state) = if let Some(cached) = cache::load_cache(&repo_root) {
+            let is_fresh = cached.is_fresh();
+            let worktrees = Self::worktrees_from_cache(cached.worktrees, &repo_root, &current_worktree_path);
+            if is_fresh {
+                // Cache is fresh, no need to refresh
+                (worktrees, LoadingState::Idle)
+            } else {
+                // Cache is stale, show it but trigger background refresh
+                (worktrees, LoadingState::Loading)
+            }
+        } else {
+            // No cache, need to load
+            (Vec::new(), LoadingState::Loading)
+        };
+
         let mut app = Self {
-            worktrees: Vec::new(),
+            worktrees,
             table_state: TableState::default(),
             mode: AppMode::Normal,
             should_quit: false,
@@ -282,6 +303,9 @@ impl App {
             status_message: None,
             sort_order: SortOrder::Recent,
             show_recent_commits: true,
+
+            loading_state,
+            spinner_frame: 0,
 
             create_input: String::new(),
             create_cursor: 0,
@@ -304,13 +328,102 @@ impl App {
             list_area: None,
         };
 
-        app.refresh_worktrees()?;
+        // Apply sorting to cached data
         if !app.worktrees.is_empty() {
+            app.apply_sort();
+            app.filtered_indices = (0..app.worktrees.len()).collect();
             app.table_state.select(Some(0));
         }
 
-        timing_log!("[TIMING] App::new() total: {:?}", total_start.elapsed());
         Ok(app)
+    }
+
+    /// Convert cached worktrees back to Worktree structs
+    fn worktrees_from_cache(
+        cached: Vec<cache::CachedWorktree>,
+        repo_root: &PathBuf,
+        current_path: &PathBuf,
+    ) -> Vec<Worktree> {
+        cached
+            .into_iter()
+            .map(|c| {
+                let is_main = c.path == *repo_root;
+                let is_current = current_path.starts_with(&c.path);
+                Worktree {
+                    path: c.path,
+                    branch: c.branch,
+                    commit: c.commit,
+                    commit_short: c.commit_short,
+                    commit_message: c.commit_message,
+                    commit_time: c.commit_time,
+                    is_main,
+                    is_current,
+                    is_bare: c.is_bare,
+                    is_detached: c.is_detached,
+                    is_locked: c.is_locked,
+                    lock_reason: c.lock_reason,
+                    is_prunable: c.is_prunable,
+                    status: WorktreeStatus {
+                        modified: c.status.modified,
+                        staged: c.status.staged,
+                        untracked: c.status.untracked,
+                        ahead: c.status.ahead,
+                        behind: c.status.behind,
+                    },
+                    recent_commits: c
+                        .recent_commits
+                        .into_iter()
+                        .map(|ci| CommitInfo {
+                            hash: ci.hash,
+                            message: ci.message,
+                            time_ago: ci.time_ago,
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    /// Convert worktrees to cached format and save to disk
+    fn save_to_cache(&self) {
+        let cached_worktrees: Vec<cache::CachedWorktree> = self
+            .worktrees
+            .iter()
+            .map(|w| cache::CachedWorktree {
+                path: w.path.clone(),
+                branch: w.branch.clone(),
+                commit: w.commit.clone(),
+                commit_short: w.commit_short.clone(),
+                commit_message: w.commit_message.clone(),
+                commit_time: w.commit_time,
+                is_main: w.is_main,
+                is_current: w.is_current,
+                is_bare: w.is_bare,
+                is_detached: w.is_detached,
+                is_locked: w.is_locked,
+                lock_reason: w.lock_reason.clone(),
+                is_prunable: w.is_prunable,
+                status: cache::CachedWorktreeStatus {
+                    modified: w.status.modified,
+                    staged: w.status.staged,
+                    untracked: w.status.untracked,
+                    ahead: w.status.ahead,
+                    behind: w.status.behind,
+                },
+                recent_commits: w
+                    .recent_commits
+                    .iter()
+                    .map(|ci| cache::CachedCommitInfo {
+                        hash: ci.hash.clone(),
+                        message: ci.message.clone(),
+                        time_ago: ci.time_ago.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        let cache_data = cache::create_cache(self.repo_root.clone(), cached_worktrees);
+        let _ = cache::save_cache(&cache_data);
     }
 
     fn find_git_root() -> Result<PathBuf> {
@@ -354,15 +467,11 @@ impl App {
     }
 
     fn refresh_worktrees(&mut self) -> Result<()> {
-        let total_start = Instant::now();
-        
-        let start = Instant::now();
         let output = Command::new("git")
             .current_dir(&self.repo_root)
             .args(["worktree", "list", "--porcelain"])
             .output()
             .context("Failed to list worktrees")?;
-        timing_log!("[TIMING] git worktree list: {:?}", start.elapsed());
 
         if !output.status.success() {
             anyhow::bail!("git worktree list failed");
@@ -373,28 +482,15 @@ impl App {
         self.last_refresh = Instant::now();
 
         // Fetch additional status for each worktree
-        let start = Instant::now();
-        for (i, worktree) in self.worktrees.iter_mut().enumerate() {
+        for worktree in &mut self.worktrees {
             if !worktree.is_bare {
-                let wt_start = Instant::now();
                 worktree.status = Self::get_worktree_status(&worktree.path);
-                let status_time = wt_start.elapsed();
-                
-                let commit_start = Instant::now();
                 let commit_info = Self::get_commit_info(&worktree.path);
                 worktree.commit_message = commit_info.0;
                 worktree.commit_time = commit_info.1;
-                let commit_time = commit_start.elapsed();
-                
-                let recent_start = Instant::now();
                 worktree.recent_commits = Self::get_recent_commits(&worktree.path, 10);
-                let recent_time = recent_start.elapsed();
-                
-                timing_log!("[TIMING] worktree {}: status={:?}, commit={:?}, recent={:?}", 
-                    i, status_time, commit_time, recent_time);
             }
         }
-        timing_log!("[TIMING] all worktree info: {:?}", start.elapsed());
 
         // Apply sorting
         self.apply_sort();
@@ -406,7 +502,10 @@ impl App {
             self.filtered_indices = (0..self.worktrees.len()).collect();
         }
 
-        timing_log!("[TIMING] refresh_worktrees total: {:?}", total_start.elapsed());
+        // Save to cache
+        self.save_to_cache();
+        
+        self.loading_state = LoadingState::Idle;
         self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
     }
@@ -1231,28 +1330,6 @@ impl App {
 // Event Handling
 // ============================================================================
 
-fn handle_events(app: &mut App) -> Result<bool> {
-    if event::poll(Duration::from_millis(100))? {
-        match event::read()? {
-            Event::Key(key) => match app.mode {
-                AppMode::Normal => handle_normal_mode(app, key.code, key.modifiers)?,
-                AppMode::Help => handle_help_mode(app, key.code)?,
-                AppMode::Create => handle_create_mode(app, key.code, key.modifiers)?,
-                AppMode::Delete => handle_delete_mode(app, key.code)?,
-                AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
-                AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
-                AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
-                AppMode::Error => handle_error_mode(app, key.code)?,
-            },
-            Event::Mouse(mouse) => {
-                handle_mouse_event(app, mouse)?;
-            }
-            _ => {}
-        }
-    }
-    app.clear_old_status();
-    Ok(app.should_quit)
-}
 
 fn handle_mouse_event(app: &mut App, mouse: crossterm::event::MouseEvent) -> Result<()> {
     if app.mode != AppMode::Normal {
@@ -2107,6 +2184,18 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Rect::new(layout[0].x + 1, layout[0].y, layout[0].width, 1),
     );
 
+    // Build right side content: spinner (if loading) + status message
+    let mut right_spans: Vec<Span> = Vec::new();
+    
+    // Add spinner if loading
+    if app.loading_state == LoadingState::Loading {
+        let spinner_char = SPINNER_FRAMES[app.spinner_frame];
+        right_spans.push(Span::styled(
+            format!("{} ", spinner_char),
+            Style::default().fg(colors::BORDER_INACTIVE),
+        ));
+    }
+
     if let Some(ref msg) = app.status_message {
         let color = match msg.level {
             MessageLevel::Info => colors::INFO,
@@ -2114,9 +2203,12 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             MessageLevel::Warning => colors::WARNING,
             MessageLevel::Error => colors::ERROR,
         };
+        right_spans.push(Span::styled(&msg.text, Style::default().fg(color)));
+    }
+    
+    if !right_spans.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled(&msg.text, Style::default().fg(color)))
-                .alignment(Alignment::Right),
+            Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
             Rect::new(layout[1].x, layout[1].y, layout[1].width - 1, 1),
         );
     }
@@ -2627,7 +2719,11 @@ fn truncate_path(path: &PathBuf, max_len: usize) -> String {
 // Main
 // ============================================================================
 
-fn main() -> Result<()> {
+/// Spinner characters for loading indicator
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+#[tokio::main]
+async fn main() -> Result<()> {
     // Parse --cwd-file argument (for shell integration)
     let cwd_file: Option<PathBuf> = std::env::args()
         .skip(1)
@@ -2643,7 +2739,7 @@ fn main() -> Result<()> {
     let app_result = App::new();
 
     let result = match app_result {
-        Ok(mut app) => run_app(&mut terminal, &mut app),
+        Ok(mut app) => run_app(&mut terminal, &mut app).await,
         Err(e) => {
             disable_raw_mode()?;
             execute!(
@@ -2683,11 +2779,156 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<Option<PathBuf>> {
+async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<Option<PathBuf>> {
+    // Create channel for background refresh updates
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppUpdate>();
+    
+    // If we need to load/refresh, spawn background task
+    if app.loading_state == LoadingState::Loading {
+        spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+    }
+    
+    // Create async event stream
+    let mut event_stream = EventStream::new();
+    
+    // Spinner tick interval (100ms for smooth animation)
+    let mut spinner_interval = tokio::time::interval(Duration::from_millis(100));
+    
     loop {
+        // Render
         terminal.draw(|f| ui(f, app))?;
-        if handle_events(app)? {
-            return Ok(app.cd_path.take());
+        
+        // Async event handling with tokio::select!
+        tokio::select! {
+            // Handle keyboard/mouse events
+            maybe_event = event_stream.next() => {
+                if let Some(Ok(event)) = maybe_event {
+                    if handle_event(app, event, &tx)? {
+                        return Ok(app.cd_path.take());
+                    }
+                }
+            }
+            
+            // Handle background refresh updates
+            Some(update) = rx.recv() => {
+                match update {
+                    AppUpdate::WorktreesLoaded(worktrees) => {
+                        let selected = app.table_state.selected();
+                        app.worktrees = worktrees;
+                        app.apply_sort();
+                        app.filtered_indices = (0..app.worktrees.len()).collect();
+                        app.loading_state = LoadingState::Idle;
+                        app.save_to_cache();
+                        
+                        // Restore selection
+                        if let Some(idx) = selected {
+                            if idx < app.filtered_indices.len() {
+                                app.table_state.select(Some(idx));
+                            } else if !app.filtered_indices.is_empty() {
+                                app.table_state.select(Some(0));
+                            }
+                        } else if !app.filtered_indices.is_empty() {
+                            app.table_state.select(Some(0));
+                        }
+                        
+                        app.set_status("Refreshed from background", MessageLevel::Success);
+                    }
+                }
+            }
+            
+            // Spinner animation tick
+            _ = spinner_interval.tick() => {
+                if app.loading_state == LoadingState::Loading {
+                    app.spinner_frame = (app.spinner_frame + 1) % SPINNER_FRAMES.len();
+                }
+                app.clear_old_status();
+            }
         }
     }
+}
+
+/// Spawn a background task to refresh worktree data
+fn spawn_refresh_task(tx: mpsc::UnboundedSender<AppUpdate>, repo_root: PathBuf, current_path: PathBuf) {
+    tokio::spawn(async move {
+        // Run blocking git commands in a blocking task
+        let result = tokio::task::spawn_blocking(move || {
+            fetch_all_worktrees(&repo_root, &current_path)
+        }).await;
+        
+        if let Ok(Ok(worktrees)) = result {
+            let _ = tx.send(AppUpdate::WorktreesLoaded(worktrees));
+        }
+    });
+}
+
+/// Fetch all worktree data (runs in blocking thread)
+fn fetch_all_worktrees(repo_root: &PathBuf, current_path: &PathBuf) -> Result<Vec<Worktree>> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .context("Failed to list worktrees")?;
+
+    if !output.status.success() {
+        anyhow::bail!("git worktree list failed");
+    }
+
+    let content = String::from_utf8(output.stdout)?;
+    let mut worktrees = App::parse_worktree_list(&content, repo_root, current_path)?;
+
+    // Fetch additional status for each worktree
+    for worktree in &mut worktrees {
+        if !worktree.is_bare {
+            worktree.status = App::get_worktree_status(&worktree.path);
+            let commit_info = App::get_commit_info(&worktree.path);
+            worktree.commit_message = commit_info.0;
+            worktree.commit_time = commit_info.1;
+            worktree.recent_commits = App::get_recent_commits(&worktree.path, 10);
+        }
+    }
+
+    Ok(worktrees)
+}
+
+/// Handle a single event, return true if should quit
+fn handle_event(app: &mut App, event: Event, tx: &mpsc::UnboundedSender<AppUpdate>) -> Result<bool> {
+    match event {
+        Event::Key(key) => match app.mode {
+            AppMode::Normal => handle_normal_mode_async(app, key.code, key.modifiers, tx)?,
+            AppMode::Help => handle_help_mode(app, key.code)?,
+            AppMode::Create => handle_create_mode(app, key.code, key.modifiers)?,
+            AppMode::Delete => handle_delete_mode(app, key.code)?,
+            AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
+            AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
+            AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
+            AppMode::Error => handle_error_mode(app, key.code)?,
+        },
+        Event::Mouse(mouse) => {
+            handle_mouse_event(app, mouse)?;
+        }
+        _ => {}
+    }
+    Ok(app.should_quit)
+}
+
+/// Handle normal mode with async refresh capability
+fn handle_normal_mode_async(
+    app: &mut App, 
+    key: KeyCode, 
+    modifiers: KeyModifiers,
+    tx: &mpsc::UnboundedSender<AppUpdate>
+) -> Result<()> {
+    match key {
+        // Refresh triggers background task instead of blocking
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            if app.loading_state != LoadingState::Loading {
+                app.loading_state = LoadingState::Loading;
+                spawn_refresh_task(tx.clone(), app.repo_root.clone(), app.current_worktree_path.clone());
+                app.set_status("Refreshing...", MessageLevel::Info);
+            }
+        }
+        // All other keys handled by existing function
+        _ => handle_normal_mode(app, key, modifiers)?
+    }
+    Ok(())
 }
