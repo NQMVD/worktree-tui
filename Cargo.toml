@@ -22,6 +22,9 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 thiserror = "2.0"
 
+# TTY detection for shell integration
+atty = "0.2"
+
 # Date/time handling
 chrono = "0.4"
 

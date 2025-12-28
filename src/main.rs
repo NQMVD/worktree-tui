@@ -22,7 +22,8 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    io::{self, Stdout},
+    fs::File,
+    io::{self, Stdout, Write},
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
@@ -196,6 +197,7 @@ struct App {
     table_state: TableState,
     mode: AppMode,
     should_quit: bool,
+    cd_path: Option<PathBuf>, // Path to change to on exit (for shell integration)
 
     // Repository info
     repo_root: PathBuf,
@@ -253,6 +255,7 @@ impl App {
             table_state: TableState::default(),
             mode: AppMode::Normal,
             should_quit: false,
+            cd_path: None,
 
             repo_root,
             repo_name,
@@ -1294,6 +1297,14 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             }
         }
 
+        // Change directory to selected worktree (for shell integration)
+        KeyCode::Char(' ') => {
+            if let Some(wt) = app.selected_worktree() {
+                app.cd_path = Some(wt.path.clone());
+                app.should_quit = true;
+            }
+        }
+
         // New features
         KeyCode::Char('y') => app.copy_path_to_clipboard(),
         KeyCode::Char('O') => app.open_in_file_manager(),
@@ -2125,6 +2136,7 @@ fn render_help_dialog(frame: &mut Frame) {
         (
             "Utilities",
             vec![
+                "Space            Change to worktree dir",
                 "y                Copy path to clipboard",
                 "O                Open in file manager",
                 "s                Cycle sort order",
@@ -2579,6 +2591,12 @@ fn truncate_path(path: &PathBuf, max_len: usize) -> String {
 // ============================================================================
 
 fn main() -> Result<()> {
+    // Parse --cwd-file argument (for shell integration)
+    let cwd_file: Option<PathBuf> = std::env::args()
+        .skip(1)
+        .find(|arg| arg.starts_with("--cwd-file="))
+        .map(|arg| PathBuf::from(arg.strip_prefix("--cwd-file=").unwrap()));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -2611,17 +2629,28 @@ fn main() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = result {
-        eprintln!("Error: {:?}", err);
+    match result {
+        Ok(Some(cd_path)) => {
+            // Write path to cwd-file for shell integration
+            if let Some(ref file_path) = cwd_file {
+                if let Ok(mut file) = File::create(file_path) {
+                    let _ = writeln!(file, "{}", cd_path.display());
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("Error: {:?}", err);
+        }
     }
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<Option<PathBuf>> {
     loop {
         terminal.draw(|f| ui(f, app))?;
         if handle_events(app)? {
-            return Ok(());
+            return Ok(app.cd_path.take());
         }
     }
 }
