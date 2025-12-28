@@ -776,6 +776,18 @@ impl App {
             self.create_cursor = 0;
             self.create_from_branch = None;
             self.create_checkout_existing = false;
+            // get index of newly created worktree and select it
+            // Assumes worktree was created successfully
+            if let Some(pos) = self
+                .worktrees
+                .iter()
+                .position(|wt| wt.path == worktree_path)
+            {
+                if let Some(filtered_pos) = self.filtered_indices.iter().position(|&idx| idx == pos)
+                {
+                    self.table_state.select(Some(filtered_pos));
+                }
+            }
         } else {
             let error = String::from_utf8_lossy(&output.stderr);
             self.set_status(&format!("Failed: {}", error.trim()), MessageLevel::Error);
@@ -1154,8 +1166,24 @@ impl App {
 
     fn cycle_sort(&mut self) {
         self.sort_order = self.sort_order.next();
+        // keep selection on the same worktree if possible
+        // get currently selected worktrees name
+        let selected_wt_name = self.selected_worktree().and_then(|wt| wt.branch.clone());
         self.apply_sort();
         self.filtered_indices = (0..self.worktrees.len()).collect();
+        // restore selection
+        if let Some(name) = selected_wt_name {
+            if let Some(pos) = self
+                .worktrees
+                .iter()
+                .position(|wt| wt.branch.as_ref() == Some(&name))
+            {
+                if let Some(filtered_pos) = self.filtered_indices.iter().position(|&idx| idx == pos)
+                {
+                    self.table_state.select(Some(filtered_pos));
+                }
+            }
+        }
         if !self.search_query.is_empty() {
             self.update_search_filter();
         }
