@@ -13,7 +13,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
-    style::{Modifier, Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Cell, Clear, List, ListItem, ListState, Padding, Paragraph,
@@ -116,10 +116,10 @@ impl WorktreeStatus {
             parts.push(format!("?{}", self.untracked));
         }
         if self.ahead > 0 {
-            parts.push(format!("{}", self.ahead));
+            parts.push(format!("↑{}", self.ahead));
         }
         if self.behind > 0 {
-            parts.push(format!("{}", self.behind));
+            parts.push(format!("↓{}", self.behind));
         }
         parts.join(" ")
     }
@@ -363,7 +363,7 @@ impl App {
                 let commit_info = Self::get_commit_info(&worktree.path);
                 worktree.commit_message = commit_info.0;
                 worktree.commit_time = commit_info.1;
-                worktree.recent_commits = Self::get_recent_commits(&worktree.path, 5);
+                worktree.recent_commits = Self::get_recent_commits(&worktree.path, 10);
             }
         }
 
@@ -1967,7 +1967,7 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
 
-            for commit in wt.recent_commits.iter().skip(1).take(4) {
+            for commit in wt.recent_commits.iter().skip(1).take(8) {
                 let msg = truncate_str(&commit.message, inner.width.saturating_sub(16) as usize);
                 lines.push(Line::from(vec![
                     Span::styled(
