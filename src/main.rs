@@ -1392,11 +1392,19 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Tab => {}
 
         // Actions
-        KeyCode::Char('n') => {
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            let prefill_current = matches!(key, KeyCode::Char('N'));
             app.mode = AppMode::Create;
             app.create_input.clear();
             app.create_cursor = 0;
-            app.create_from_branch = None;
+            app.create_from_branch = if prefill_current {
+                app.worktrees
+                    .iter()
+                    .find(|wt| wt.is_current)
+                    .and_then(|wt| wt.branch.clone())
+            } else {
+                None
+            };
             app.create_checkout_existing = false;
             let _ = app.refresh_branches();
         }
@@ -2160,9 +2168,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Normal => vec![
             ("j/k", "nav"),
             ("1-9", "jump"),
-            ("p/P", "pull/push"),
+            ("n/N", "new worktree"),
+            ("space", "cd into"),
             ("x", "delete"),
             ("m", "merge"),
+            ("p/P", "pull/push"),
             ("s", "sort"),
             ("/", "search"),
         ],
@@ -2254,7 +2264,7 @@ fn render_help_dialog(frame: &mut Frame) {
         (
             "Git Operations",
             vec![
-                "n                New worktree",
+                "n / N            New worktree / from current",
                 "Shift+Tab        Toggle new/existing branch",
                 "x / Del          Delete worktree",
                 "L                Toggle lock",
@@ -2343,9 +2353,9 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
             Span::styled("Mode: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled(
                 if app.create_checkout_existing {
-                    "[Checkout Existing]"
+                    "Checkout Existing"
                 } else {
-                    "[Create New Branch]"
+                    "Create New Branch"
                 },
                 Style::default()
                     .fg(if app.create_checkout_existing {
@@ -2419,7 +2429,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
                     .unwrap_or(if app.create_checkout_existing {
                         "(select branch)"
                     } else {
-                        "HEAD (current)"
+                        "HEAD (base?)"
                     }),
                 Style::default().fg(colors::CLAUDE_ORANGE),
             ),
