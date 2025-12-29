@@ -1692,7 +1692,6 @@ fn handle_merge_confirm_mode(app: &mut App, key: KeyCode) -> Result<()> {
     Ok(())
 }
 
-
 // ============================================================================
 // UI Rendering
 // ============================================================================
@@ -2560,7 +2559,10 @@ fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
     let block = Block::default()
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("Merge Branch", Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+            Span::styled(
+                "Merge Branch",
+                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+            ),
             Span::raw(" "),
         ]))
         .borders(Borders::ALL)
@@ -2575,8 +2577,11 @@ fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
     // Source branch display with arrow
     let merge_direction = Line::from(vec![
         Span::styled(&source_branch, Style::default().fg(colors::INFO).bold()),
-        Span::styled("  ─→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
-        Span::styled("(select target below)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()),
+        Span::styled("  ---→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        Span::styled(
+            "(select target below)",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+        ),
     ]);
     frame.render_widget(
         Paragraph::new(merge_direction).alignment(Alignment::Center),
@@ -2584,7 +2589,12 @@ fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
     );
 
     // Branch list area
-    let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(4));
+    let list_area = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(4),
+    );
 
     let items: Vec<ListItem> = app
         .available_branches
@@ -2609,7 +2619,10 @@ fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
                 Span::styled(prefix, style),
                 Span::styled(&b.name, style),
                 if is_source {
-                    Span::styled(" (source)", Style::default().fg(colors::CLAUDE_WARM_GRAY).italic())
+                    Span::styled(
+                        " (source)",
+                        Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+                    )
                 } else {
                     Span::raw("")
                 },
@@ -2639,7 +2652,7 @@ fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_merge_confirm_dialog(frame: &mut Frame, app: &App) {
-    let area = centered_rect(55, 35, frame.area());
+    let area = centered_rect(45, 35, frame.area());
     frame.render_widget(Clear, area);
 
     // Get source and target branch names
@@ -2676,18 +2689,21 @@ fn render_merge_confirm_dialog(frame: &mut Frame, app: &App) {
                 Span::styled("Merge ", Style::default().fg(colors::CLAUDE_CREAM)),
                 Span::styled(&source_branch, Style::default().fg(colors::INFO).bold()),
                 Span::styled(" into ", Style::default().fg(colors::CLAUDE_CREAM)),
-                Span::styled(&target_branch, Style::default().fg(colors::CLAUDE_ORANGE).bold()),
+                Span::styled(
+                    &target_branch,
+                    Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+                ),
                 Span::styled("?", Style::default().fg(colors::CLAUDE_CREAM)),
             ]),
             Line::raw(""),
             Line::from(vec![
                 Span::styled(&source_branch, Style::default().fg(colors::INFO)),
-                Span::styled("  ─────→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+                Span::styled("  ------→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
                 Span::styled(&target_branch, Style::default().fg(colors::CLAUDE_ORANGE)),
             ]),
             Line::raw(""),
             Line::styled(
-                format!("This will run: git merge {}", source_branch),
+                format!("In {}: git merge {}", target_branch, source_branch),
                 Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
             ),
         ])
@@ -2700,9 +2716,14 @@ fn render_merge_confirm_dialog(frame: &mut Frame, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " y ",
-                Style::default().fg(colors::CLAUDE_DARKER).bg(colors::SUCCESS),
+                Style::default()
+                    .fg(colors::CLAUDE_DARKER)
+                    .bg(colors::SUCCESS),
             ),
-            Span::styled(" Yes, merge  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled(
+                " Yes, merge  ",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            ),
             Span::styled(
                 " n ",
                 Style::default()
