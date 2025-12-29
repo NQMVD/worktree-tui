@@ -1392,7 +1392,7 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Tab => {}
 
         // Actions
-        KeyCode::Char('c') | KeyCode::Char('a') => {
+        KeyCode::Char('n') => {
             app.mode = AppMode::Create;
             app.create_input.clear();
             app.create_cursor = 0;
@@ -2254,7 +2254,7 @@ fn render_help_dialog(frame: &mut Frame) {
         (
             "Git Operations",
             vec![
-                "c / a            Create worktree",
+                "n                New worktree",
                 "Shift+Tab        Toggle new/existing branch",
                 "x / Del          Delete worktree",
                 "L                Toggle lock",
@@ -2323,7 +2323,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "Create Worktree",
+                "Create New Worktree",
                 Style::default().fg(colors::CLAUDE_ORANGE).bold(),
             ),
             Span::raw(" "),
