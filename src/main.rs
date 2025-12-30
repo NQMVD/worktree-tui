@@ -1590,7 +1590,11 @@ fn handle_search_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             app.search_query.clear();
             app.filtered_indices = (0..app.worktrees.len()).collect();
         }
-        KeyCode::Enter => app.mode = AppMode::Normal,
+        KeyCode::Enter => {
+            app.mode = AppMode::Normal;
+            app.search_query.clear();
+            app.filtered_indices = (0..app.worktrees.len()).collect();
+        }
         KeyCode::Backspace => {
             if app.search_cursor > 0 {
                 app.search_query.remove(app.search_cursor - 1);
