@@ -1,0 +1,2 @@
+[2025-12-31 13:05:50] STARTED session 'wtt' (120x40) with command: cd fifty-worktrees && ../worktree-tui/target/release/worktree-tui
+[2025-12-31 13:06:01] INSPECTED (CURSOR + SCREEN)

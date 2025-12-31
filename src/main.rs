@@ -2036,8 +2036,15 @@ fn render_details_panel(frame: &mut Frame, app: &App, area: Rect) {
         if wt.status.is_clean() {
             status_spans.push(Span::styled("Clean", Style::default().fg(colors::SUCCESS)));
         } else {
+            // Use appropriate label based on what type of changes exist
+            let has_changes = wt.status.staged > 0 || wt.status.modified > 0;
+            let status_label = if has_changes {
+                "Modified"
+            } else {
+                "Changes"
+            };
             status_spans.push(Span::styled(
-                "Modified",
+                status_label,
                 Style::default().fg(colors::WARNING),
             ));
             status_spans.push(Span::raw(" "));

@@ -50,6 +50,8 @@ while true; do
         RESUME_ARG="-s $SESSION_ID"
     fi
 
+    log_loop "Running droid with model $MODEL..."
+    log_loop "Command: droid exec $AUTONOMY --model \"$MODEL\" $RESUME_ARG -o json \"$CURRENT_PROMPT\""
     # Run droid and capture JSON output to extract session_id
     # We use jq to parse the session_id from the JSON response
     RESPONSE=$(droid exec $AUTONOMY --model "$MODEL" $RESUME_ARG -o json "$CURRENT_PROMPT" 2>&1)
@@ -67,6 +69,7 @@ while true; do
     fi
 
     log_loop "Iteration $ITERATION ended. Cooling down..."
+    send_discord "♻️ **Iteration $ITERATION Complete**: Restarting the droid agent loop for model \`$MODEL\`."
     sleep 5
     ((ITERATION++))
 done

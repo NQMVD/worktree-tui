@@ -99,7 +99,7 @@ start)
     else
         tmux new-session -d -s "$SESSION_NAME" -x "$WIDTH" -y "$HEIGHT" "$COMMAND"
         log "STARTED session '$SESSION_NAME' (${WIDTH}x${HEIGHT}) with command: $COMMAND"
-        echo "Started session '$SESSION_NAME' at ${WIDTH}x${HEIGHT}"
+        echo "Started session '$SESSION_NAME' at ${WIDTH}x${HEIGHT} running: $COMMAND"
     fi
     ;;
 
