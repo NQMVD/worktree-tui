@@ -578,7 +578,7 @@ impl App {
         self.save_to_cache();
 
         self.loading_state = LoadingState::Idle;
-        self.set_status("Refreshed worktree list", MessageLevel::Info);
+        // self.set_status("Refreshed worktree list", MessageLevel::Info);
         Ok(())
     }
 
@@ -1591,6 +1591,11 @@ fn handle_search_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
             app.filtered_indices = (0..app.worktrees.len()).collect();
         }
         KeyCode::Enter => {
+            if let Some(selected_filtered_idx) = app.table_state.selected() {
+                if let Some(&actual_idx) = app.filtered_indices.get(selected_filtered_idx) {
+                    app.table_state.select(Some(actual_idx));
+                }
+            }
             app.mode = AppMode::Normal;
             app.search_query.clear();
             app.filtered_indices = (0..app.worktrees.len()).collect();
@@ -1600,6 +1605,30 @@ fn handle_search_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
                 app.search_query.remove(app.search_cursor - 1);
                 app.search_cursor -= 1;
                 app.update_search_filter();
+            }
+        }
+        KeyCode::Left => {
+            app.search_cursor = app.search_cursor.saturating_sub(1);
+        }
+        KeyCode::Right => {
+            app.search_cursor = (app.search_cursor + 1).min(app.search_query.len());
+        }
+        KeyCode::Up => {
+            let len = app.filtered_indices.len();
+            if len > 0 {
+                let current = app.table_state.selected().unwrap_or(0);
+                app.table_state.select(Some(if current == 0 {
+                    len - 1
+                } else {
+                    current - 1
+                }));
+            }
+        }
+        KeyCode::Down => {
+            let len = app.filtered_indices.len();
+            if len > 0 {
+                let current = app.table_state.selected().unwrap_or(0);
+                app.table_state.select(Some((current + 1) % len));
             }
         }
         KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
