@@ -68,6 +68,14 @@ check_fonts() {
     return 1
 }
 
+check_session() {
+    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        echo "Error: Session '$SESSION_NAME' does not exist (anymore)."
+        log "Error: Session '$SESSION_NAME' does not exist (anymore)."
+        exit 1
+    fi
+}
+
 case "$ACTION" in
 check-deps)
     echo "Verifying environment..."
@@ -114,10 +122,7 @@ recover)
     ;;
 
 screenshot)
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Error: Session '$SESSION_NAME' does not exist."
-        exit 1
-    fi
+    check_session
     if ! command -v freeze &>/dev/null; then
         echo "Error: 'freeze' is not installed."
         exit 1
@@ -138,38 +143,31 @@ send)
         echo "Error: No keys specified."
         exit 1
     fi
+    check_session
     tmux send-keys -t "$SESSION_NAME" "$KEYS"
     log "SEND :: $KEYS"
     ;;
 
 capture)
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Error: Session '$SESSION_NAME' does not exist."
-        exit 1
-    fi
+    check_session
     tmux capture-pane -p -t "$SESSION_NAME"
     log "CAPTURED"
     ;;
 
 capture-ansi)
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Error: Session '$SESSION_NAME' does not exist."
-        exit 1
-    fi
+    check_session
     tmux capture-pane -e -p -t "$SESSION_NAME"
     log "CAPTURED ANSI"
     ;;
 
 cursor)
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Error: Session '$SESSION_NAME' does not exist."
-        exit 1
-    fi
+    check_session
     tmux display-message -t "$SESSION_NAME" -p "#{cursor_x},#{cursor_y}"
     log "GOT CURSOR POSITION"
     ;;
 
 inspect)
+    check_session
     echo "CURSOR: $(tmux display-message -t "$SESSION_NAME" -p "#{cursor_x},#{cursor_y}")"
     echo "SCREEN:"
     tmux capture-pane -p -t "$SESSION_NAME"
@@ -177,10 +175,7 @@ inspect)
     ;;
 
 stop)
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        echo "Error: Session '$SESSION_NAME' does not exist."
-        exit 1
-    fi
+    check_session
 
     tmux kill-session -t "$SESSION_NAME"
     log "STOPPED session '$SESSION_NAME'"

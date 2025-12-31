@@ -59,6 +59,10 @@ while true; do
     # Log the raw response for debugging if needed
     echo "$RESPONSE" >>"$LOOP_LOG"
 
+    # extract result message for logging
+    RESULT_MESSAGE=$(echo "$RESPONSE" | jq -r '.result // "No message returned."')
+    log_loop "Droid Response Message: $RESULT_MESSAGE"
+
     # Update Session ID from JSON output
     NEW_ID=$(echo "$RESPONSE" | jq -r '.session_id // empty')
     [[ -n "$NEW_ID" ]] && SESSION_ID="$NEW_ID"
