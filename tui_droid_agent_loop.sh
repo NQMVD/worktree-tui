@@ -87,5 +87,6 @@ done
 send_discord "✅ **Mission Accomplished**: Droid has terminated the loop."
 
 # send the worklog.md as text to discord
+sleep 2
 WORKLOG_CONTENT=$(cat agent_worklog.md | head -n 100) # limit to first 100 lines
 send_discord "📝 **Final Agent Worklog:**\n\n$WORKLOG_CONTENT\n"

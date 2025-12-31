@@ -43,7 +43,7 @@ LOG_FILE="$LOG_DIR/agent_interaction_${SESSION_NAME}.log"
 
 log() {
     if [[ "$ACTION" != "list" && "$ACTION" != "wait" && "$ACTION" != "check-deps" ]]; then
-        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >>"$LOG_FILE"
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >>"$LOG_FILE"
     fi
 }
 
@@ -151,13 +151,15 @@ send)
 capture)
     check_session
     tmux capture-pane -p -t "$SESSION_NAME"
-    log "CAPTURED"
+    log "CAPTURED:"
+    tmux capture-pane -p -t "$SESSION_NAME" >>"$LOG_FILE"
     ;;
 
 capture-ansi)
     check_session
     tmux capture-pane -e -p -t "$SESSION_NAME"
-    log "CAPTURED ANSI"
+    log "CAPTURED ANSI:"
+    tmux capture-pane -e -p -t "$SESSION_NAME" >>"$LOG_FILE"
     ;;
 
 cursor)
@@ -171,7 +173,8 @@ inspect)
     echo "CURSOR: $(tmux display-message -t "$SESSION_NAME" -p "#{cursor_x},#{cursor_y}")"
     echo "SCREEN:"
     tmux capture-pane -p -t "$SESSION_NAME"
-    log "INSPECTED (CURSOR + SCREEN)"
+    log "INSPECTED (CURSOR + SCREEN):"
+    tmux capture-pane -p -t "$SESSION_NAME" >>"$LOG_FILE"
     ;;
 
 stop)
