@@ -63,6 +63,12 @@ while true; do
     RESULT_MESSAGE=$(echo "$RESPONSE" | jq -r '.result // "No message returned."')
     log_loop "Droid Response Message: $RESULT_MESSAGE"
 
+    # extract more stats for logging
+    TURNS_TAKEN=$(echo "$RESPONSE" | jq -r '.num_turns // 0')
+    TIME_TAKEN=$(echo "$RESPONSE" | jq -r '.duration_ms // 0')
+    TIME_TAKEN=$((TIME_TAKEN / 1000 / 60)) # convert ms to minutes
+    log_loop "Droid Stats: Turns: ${TURNS_TAKEN}, Time Taken: ${TIME_TAKEN}mins"
+
     # Update Session ID from JSON output
     NEW_ID=$(echo "$RESPONSE" | jq -r '.session_id // empty')
     [[ -n "$NEW_ID" ]] && SESSION_ID="$NEW_ID"
@@ -79,3 +85,7 @@ while true; do
 done
 
 send_discord "✅ **Mission Accomplished**: Droid has terminated the loop."
+
+# send the worklog.md as text to discord
+WORKLOG_CONTENT=$(cat agent_worklog.md | head -n 100) # limit to first 100 lines
+send_discord "📝 **Final Agent Worklog:**\n\n$WORKLOG_CONTENT\n"

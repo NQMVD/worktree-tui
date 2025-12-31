@@ -1,3 +1,0 @@
-[2025-12-31 12:53:07] STARTED session 'wtt' (120x40) with command: ../worktree-tui/target/debug/worktree-tui
-[2025-12-31 12:53:10] INSPECTED (CURSOR + SCREEN)
-[2025-12-31 12:53:15] STOPPED session 'wtt'
