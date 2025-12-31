@@ -1,0 +1,1 @@
+- [ ] find and fix all bugs in the worktree-tui tool, the migration to using gix was complex, ensure all features are working properly and as expected, you can use the fity-worktrees/ repo for testing, in a tmux session you can probably even use the change dir feature as they are self contained sessions.
