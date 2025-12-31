@@ -147,6 +147,7 @@ enum AppMode {
     Search,
     BranchSelect,
     MergeSelect,
+    MergeConfirm,
     Error,
 }
 
@@ -245,6 +246,7 @@ struct App {
     create_from_branch: Option<String>,
     create_checkout_existing: bool,
     merge_source_idx: Option<usize>,
+    merge_target_branch: Option<String>,
 
     // Delete dialog
     delete_confirm: bool,
@@ -353,6 +355,7 @@ impl App {
             create_from_branch: None,
             create_checkout_existing: false,
             merge_source_idx: None,
+            merge_target_branch: None,
 
             delete_confirm: false,
 
@@ -1422,11 +1425,19 @@ fn handle_normal_mode(app: &mut App, key: KeyCode, modifiers: KeyModifiers) -> R
         KeyCode::Tab => {}
 
         // Actions
-        KeyCode::Char('c') | KeyCode::Char('a') => {
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            let prefill_current = matches!(key, KeyCode::Char('N'));
             app.mode = AppMode::Create;
             app.create_input.clear();
             app.create_cursor = 0;
-            app.create_from_branch = None;
+            app.create_from_branch = if prefill_current {
+                app.worktrees
+                    .iter()
+                    .find(|wt| wt.is_current)
+                    .and_then(|wt| wt.branch.clone())
+            } else {
+                None
+            };
             app.create_checkout_existing = false;
             let _ = app.refresh_branches();
         }
@@ -1685,6 +1696,7 @@ fn handle_merge_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
         KeyCode::Esc => {
             app.mode = AppMode::Normal;
             app.merge_source_idx = None;
+            app.merge_target_branch = None;
         }
         KeyCode::Enter => {
             let target_branch = if let Some(idx) = app.branch_list_state.selected() {
@@ -1693,11 +1705,10 @@ fn handle_merge_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
                 None
             };
 
-            if let (Some(source_idx), Some(target)) = (app.merge_source_idx, target_branch) {
-                app.perform_merge(source_idx, target)?;
+            if target_branch.is_some() {
+                app.merge_target_branch = target_branch;
+                app.mode = AppMode::MergeConfirm;
             }
-            app.mode = AppMode::Normal;
-            app.merge_source_idx = None;
         }
         KeyCode::Char('j') | KeyCode::Down => {
             let len = app.available_branches.len();
@@ -1721,6 +1732,29 @@ fn handle_merge_select_mode(app: &mut App, key: KeyCode) -> Result<()> {
     }
     Ok(())
 }
+
+fn handle_merge_confirm_mode(app: &mut App, key: KeyCode) -> Result<()> {
+    match key {
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.mode = AppMode::Normal;
+            app.merge_source_idx = None;
+            app.merge_target_branch = None;
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            if let (Some(source_idx), Some(target)) =
+                (app.merge_source_idx, app.merge_target_branch.take())
+            {
+                app.perform_merge(source_idx, target)?;
+            }
+            app.mode = AppMode::Normal;
+            app.merge_source_idx = None;
+            app.merge_target_branch = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 
 // ============================================================================
 // UI Rendering
@@ -1751,7 +1785,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
             render_branch_select_dialog(frame, app, "Select Base Branch");
         }
         AppMode::MergeSelect => {
-            render_branch_select_dialog(frame, app, "Merge Into Branch");
+            render_merge_dialog(frame, app);
+        }
+        AppMode::MergeConfirm => {
+            render_merge_confirm_dialog(frame, app);
         }
         AppMode::Search => render_search_bar(frame, app),
         AppMode::Error => render_error_dialog(frame, app),
@@ -2230,9 +2267,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Normal => vec![
             ("j/k", "nav"),
             ("1-9", "jump"),
-            ("p/P", "pull/push"),
+            ("n/N", "new worktree"),
+            ("space", "cd into"),
             ("x", "delete"),
             ("m", "merge"),
+            ("p/P", "pull/push"),
             ("s", "sort"),
             ("/", "search"),
         ],
@@ -2324,7 +2363,7 @@ fn render_help_dialog(frame: &mut Frame) {
         (
             "Git Operations",
             vec![
-                "c / a            Create worktree",
+                "n / N            New worktree / from current",
                 "Shift+Tab        Toggle new/existing branch",
                 "x / Del          Delete worktree",
                 "L                Toggle lock",
@@ -2393,7 +2432,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "Create Worktree",
+                "Create New Worktree",
                 Style::default().fg(colors::CLAUDE_ORANGE).bold(),
             ),
             Span::raw(" "),
@@ -2413,9 +2452,9 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
             Span::styled("Mode: ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
             Span::styled(
                 if app.create_checkout_existing {
-                    "[Checkout Existing]"
+                    "Checkout Existing"
                 } else {
-                    "[Create New Branch]"
+                    "Create New Branch"
                 },
                 Style::default()
                     .fg(if app.create_checkout_existing {
@@ -2489,7 +2528,7 @@ fn render_create_dialog(frame: &mut Frame, app: &App) {
                     .unwrap_or(if app.create_checkout_existing {
                         "(select branch)"
                     } else {
-                        "HEAD (current)"
+                        "HEAD (base?)"
                     }),
                 Style::default().fg(colors::CLAUDE_ORANGE),
             ),
@@ -2574,6 +2613,198 @@ fn render_branch_select_dialog(frame: &mut Frame, app: &mut App, title: &str) {
         ]))
         .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+    );
+}
+
+fn render_merge_dialog(frame: &mut Frame, app: &mut App) {
+    let area = centered_rect(50, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    // Get source branch name
+    let source_branch = app
+        .merge_source_idx
+        .and_then(|idx| app.worktrees.get(idx))
+        .and_then(|wt| wt.branch.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let block = Block::default()
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "Merge Branch",
+                Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+            ),
+            Span::raw(" "),
+        ]))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::CLAUDE_ORANGE))
+        .style(Style::default().bg(colors::CLAUDE_DARKER))
+        .padding(Padding::new(2, 2, 1, 1));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Source branch display with arrow
+    let merge_direction = Line::from(vec![
+        Span::styled(&source_branch, Style::default().fg(colors::INFO).bold()),
+        Span::styled("  ---→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        Span::styled(
+            "(select target below)",
+            Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(merge_direction).alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    // Branch list area
+    let list_area = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(4),
+    );
+
+    let items: Vec<ListItem> = app
+        .available_branches
+        .iter()
+        .map(|b| {
+            let is_source = b.name == source_branch;
+            let style = if is_source {
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic()
+            } else if b.is_current {
+                Style::default().fg(colors::CLAUDE_ORANGE).bold()
+            } else {
+                Style::default().fg(colors::CLAUDE_CREAM)
+            };
+            let prefix = if is_source {
+                " ✗ "
+            } else if b.is_current {
+                "  "
+            } else {
+                "   "
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(&b.name, style),
+                if is_source {
+                    Span::styled(
+                        " (source)",
+                        Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+                    )
+                } else {
+                    Span::raw("")
+                },
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(colors::SELECTION_BG))
+        .highlight_symbol(" ");
+
+    frame.render_stateful_widget(list, list_area, &mut app.branch_list_state);
+
+    // Footer instructions
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" confirm  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled("j/k", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" navigate  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+            Span::styled("Esc", Style::default().fg(colors::CLAUDE_ORANGE)),
+            Span::styled(" cancel", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        ]))
+        .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+    );
+}
+
+fn render_merge_confirm_dialog(frame: &mut Frame, app: &App) {
+    let area = centered_rect(45, 35, frame.area());
+    frame.render_widget(Clear, area);
+
+    // Get source and target branch names
+    let source_branch = app
+        .merge_source_idx
+        .and_then(|idx| app.worktrees.get(idx))
+        .and_then(|wt| wt.branch.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let target_branch = app
+        .merge_target_branch
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let block = Block::default()
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Confirm Merge", Style::default().fg(colors::WARNING).bold()),
+            Span::raw(" "),
+        ]))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::WARNING))
+        .style(Style::default().bg(colors::CLAUDE_DARKER))
+        .padding(Padding::new(2, 2, 1, 1));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Confirmation message
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Merge ", Style::default().fg(colors::CLAUDE_CREAM)),
+                Span::styled(&source_branch, Style::default().fg(colors::INFO).bold()),
+                Span::styled(" into ", Style::default().fg(colors::CLAUDE_CREAM)),
+                Span::styled(
+                    &target_branch,
+                    Style::default().fg(colors::CLAUDE_ORANGE).bold(),
+                ),
+                Span::styled("?", Style::default().fg(colors::CLAUDE_CREAM)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled(&source_branch, Style::default().fg(colors::INFO)),
+                Span::styled("  ------→  ", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+                Span::styled(&target_branch, Style::default().fg(colors::CLAUDE_ORANGE)),
+            ]),
+            Line::raw(""),
+            Line::styled(
+                format!("In {}: git merge {}", target_branch, source_branch),
+                Style::default().fg(colors::CLAUDE_WARM_GRAY).italic(),
+            ),
+        ])
+        .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + 1, inner.width, 5),
+    );
+
+    // Yes/No buttons
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " y ",
+                Style::default()
+                    .fg(colors::CLAUDE_DARKER)
+                    .bg(colors::SUCCESS),
+            ),
+            Span::styled(
+                " Yes, merge  ",
+                Style::default().fg(colors::CLAUDE_WARM_GRAY),
+            ),
+            Span::styled(
+                " n ",
+                Style::default()
+                    .fg(colors::CLAUDE_DARKER)
+                    .bg(colors::CLAUDE_WARM_GRAY),
+            ),
+            Span::styled(" Cancel", Style::default().fg(colors::CLAUDE_WARM_GRAY)),
+        ]))
+        .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + inner.height - 2, inner.width, 1),
     );
 }
 
@@ -3003,6 +3234,7 @@ fn handle_event(
             AppMode::Search => handle_search_mode(app, key.code, key.modifiers)?,
             AppMode::BranchSelect => handle_branch_select_mode(app, key.code)?,
             AppMode::MergeSelect => handle_merge_select_mode(app, key.code)?,
+            AppMode::MergeConfirm => handle_merge_confirm_mode(app, key.code)?,
             AppMode::Error => handle_error_mode(app, key.code)?,
         },
         Event::Mouse(mouse) => {
