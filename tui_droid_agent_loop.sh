@@ -25,7 +25,7 @@ send_discord() {
 
 cleanup_trap() {
     log_loop "Emergency exit: Script interrupted."
-    send_discord "🚨 **Droid Loop Stopped!** Process for \`$MODEL\` was interrupted."
+    send_discord "× **Droid Loop Stopped!** Process for \`$MODEL\` was interrupted."
     exit 1
 }
 trap cleanup_trap SIGINT SIGTERM ERR
@@ -33,7 +33,7 @@ trap cleanup_trap SIGINT SIGTERM ERR
 [[ ! -f "agent_worklog.md" ]] && echo "# Agent Development Worklog" >agent_worklog.md
 
 log_loop "Starting Droid loop with GLM-4.7 (Medium Autonomy)"
-send_discord "🚀 **Droid Loop Started**: Mission initiation for \`$MODEL\`."
+send_discord "✦ **Droid Loop Started**: Mission initiation for \`$MODEL\`."
 
 ITERATION=1
 SESSION_ID=""
@@ -79,14 +79,14 @@ while true; do
     fi
 
     log_loop "Iteration $ITERATION ended. Cooling down..."
-    send_discord "♻️ **Iteration $ITERATION Complete**: Restarting the droid agent loop for model \`$MODEL\`."
+    send_discord "⁖ **Iteration $ITERATION Complete**: Restarting the droid agent loop for model \`$MODEL\`."
     sleep 5
     ((ITERATION++))
 done
 
-send_discord "✅ **Mission Accomplished**: Droid has terminated the loop."
+send_discord "✓ **Mission Accomplished**: Droid has terminated the loop."
 
 # send the worklog.md as text to discord
 sleep 2
 WORKLOG_CONTENT=$(cat agent_worklog.md | head -n 100) # limit to first 100 lines
-send_discord "📝 **Final Agent Worklog:**\n\n$WORKLOG_CONTENT\n"
+send_discord "**Final Agent Worklog:**\n\n$WORKLOG_CONTENT\n"
